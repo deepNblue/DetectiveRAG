@@ -1,0 +1,181 @@
+# 侦探推理RAG系统配置 - 使用环境变量
+
+# 系统配置
+system:
+  name: "侦探推理RAG系统"
+  version: "1.0.0"
+  debug: false
+  log_level: "INFO"
+
+# LLM配置 - 使用智谱AI Coding Plan API
+llm:
+  # 主LLM模型（文本生成）
+  provider: "zhipu"  # 智谱AI
+  model: "gemma-4-26B-A4B-it-Q8_0.gguf"  # GLM-5.1模型
+  api_key: "${ZHIPUAI_API_KEY}"  # 从环境变量读取
+  base_url: "http://REDACTED_INTERNAL_IP:8094/v1"  # Coding Plan API
+  temperature: 0.7
+  max_tokens: 2000
+  timeout: 30
+  
+  # 备用LLM（本地vLLM服务）
+  fallback:
+    enabled: true
+    provider: "vllm"
+    model: "qwen3-30b-a3b"
+    base_url: "${VLLM_BASE_URL:http://localhost:8094/v1}"
+    api_key: "${VLLM_API_KEY:}"
+
+# 多模态配置
+multimodal:
+  enabled: true
+  
+  # VL视觉语言模型（本地vLLM服务，与embedding同机器）
+  vl:
+    provider: "openai_compatible"
+    model: "gemma-4-26B-A4B-it-Q8_0.gguf"  # Gemma 4 26B 多模态模型
+    api_key: "not-needed"
+    base_url: "http://REDACTED_INTERNAL_IP:8094/v1"  # 本地视觉模型服务
+    max_tokens: 1000
+    temperature: 0.5
+    
+  # 图片处理
+  image_processing:
+    max_size: 512
+    format: "JPEG"
+    quality: 85
+    
+  # OCR配置
+  ocr:
+    enabled: false  # 使用VL模型代替OCR
+
+# 向量数据库配置
+vector_db:
+  type: "chromadb"
+  persist_directory: "./data/vector_db"
+  collection_name: "detective_cases"
+  
+  # Embedding模型（Qwen3-Embedding，远程vLLM服务，OpenAI兼容格式）
+  embedding:
+    provider: "openai_compatible"
+    model: "/models/Qwen/Qwen3-Embedding-0___6B"  # Qwen3-Embedding-0.6B
+    api_key: "not-needed"  # 无需API Key
+    base_url: "http://REDACTED_INTERNAL_IP:9094/v1"  # 远程Embedding服务
+    dimension: 1024  # Qwen3-Embedding维度
+
+# RAG配置
+rag:
+  # 路径1: RAG-Anything
+  rag_anything:
+    enabled: true
+    chunk_size: 512
+    chunk_overlap: 50
+    top_k: 5
+    
+  # 路径2: Agentic RAG
+  agentic_rag:
+    enabled: true
+    max_iterations: 5
+    reflection_enabled: true
+    
+  # 融合配置
+  fusion:
+    method: "weighted"  # weighted/voting/ensemble
+    rag_anything_weight: 0.6
+    agentic_rag_weight: 0.4
+
+# Agent配置
+agents:
+  # 线索提取Agent
+  clue_extractor:
+    enabled: true
+    model: "glm-4"
+    temperature: 0.5
+    
+  # 嫌疑人分析Agent
+  suspect_analyzer:
+    enabled: true
+    model: "glm-4"
+    temperature: 0.6
+    
+  # 证据关联Agent
+  evidence_connector:
+    enabled: true
+    model: "glm-4"
+    temperature: 0.4
+    
+  # 推理生成Agent
+  reasoning_generator:
+    enabled: true
+    model: "glm-4"
+    temperature: 0.7
+    
+  # 图谱构建Agent
+  graph_builder:
+    enabled: true
+    model: "glm-4"
+    temperature: 0.5
+
+# WebUI配置
+webui:
+  host: "0.0.0.0"
+  port: 7860
+  debug: false
+  share: false
+  
+# 可视化配置
+visualization:
+  output_dir: "./data/visualizations"
+  
+  # 图谱配置
+  graph:
+    height: "600px"
+    width: "100%"
+    bgcolor: "#0D0208"
+    font_color: "#00FF00"
+    
+  # 动画配置
+  animation:
+    auto_play: true
+    step_delay: 2000
+    
+  # 导出配置
+  export:
+    formats: ["json", "markdown", "html"]
+    include_images: true
+
+# 数据配置
+data:
+  raw_data_path: "/home/dudu/detective_system/data"
+  processed_data_path: "./data/processed"
+  
+# 日志配置
+logging:
+  format: "{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}"
+  rotation: "10 MB"
+  retention: "7 days"
+  compression: "zip"
+  file: "./logs/detective_rag.log"
+
+# 性能配置
+performance:
+  max_workers: 4
+  cache_enabled: true
+  cache_ttl: 3600
+  rate_limit:
+    enabled: true
+    requests_per_minute: 60
+
+# 安全配置
+security:
+  # 认证配置
+  auth:
+    enabled: true
+    session_timeout: 3600
+    
+  # API密钥管理
+  api_keys:
+    use_env: true  # 使用环境变量
+    env_mapping:
+      zhipu: "ZHIPUAI_API_KEY"
+      vllm: "VLLM_API_KEY"

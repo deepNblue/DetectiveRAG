@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual env
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Secrets
+config/api_keys.yaml
+*.secret
+.env
+
+# Data & test results (too large for repo)
+data/test_results/
+data/cases/
+data/raw/
+*.jsonl
+!package.json
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backup files
+*_backup.py
+*_backup.txt
+*_v8_*.py
+*_v111_*.py
+*_v92_*.py
