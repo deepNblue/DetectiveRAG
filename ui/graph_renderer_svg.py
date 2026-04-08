@@ -1,11 +1,13 @@
 """
-静态SVG知识图谱渲染器 — 纯SVG+CSS，不依赖JavaScript
-用于在 Gradio HTML 组件中渲染知识图谱（Gradio不执行<script>标签）
+动态SVG知识图谱渲染器 — SVG动画+CSS
+用于在 Gradio HTML 组件中渲染知识图谱
 
 特性:
+  - 🎬 混沌→收敛动画: 节点从随机散布动画汇聚到有组织布局
+  - 💫 脉冲/发光动态效果: 嫌疑人节点呼吸光晕，新节点弹入
   - 增量布局: 已有节点位置固定，新节点从已有邻居附近生长
   - Fruchterman-Reingold 弹簧布局
-  - 纯 SVG+CSS，Gradio 100% 可渲染
+  - SVG `<animate>` + CSS动画，Gradio 可渲染
 """
 import math
 import random
@@ -91,6 +93,7 @@ TYPE_ICONS = {
 _prev_positions: Dict[str, Tuple[float, float]] = {}
 _prev_node_keys: set = set()  # 用于检测哪些节点是"旧的"
 _prev_edge_keys: set = set()  # 用于检测哪些边是"旧的"
+_animation_version: int = 0  # 每次渲染递增，避免SVG ID冲突
 
 
 def _safe_id(raw: str) -> str:
@@ -450,6 +453,16 @@ def _full_layout(
     return pos
 
 
+def _chaos_positions(node_ids: List[str], width: int, height: int) -> Dict[str, Tuple[float, float]]:
+    """生成初始混沌散布位置 — 节点随机分布在画布各处（不围成一圈）"""
+    pos = {}
+    for nid in node_ids:
+        x = random.uniform(30, width - 30)
+        y = random.uniform(30, height - 30)
+        pos[nid] = (x, y)
+    return pos
+
+
 def render_force_graph(
     nodes: List[Dict],
     edges: List[Dict],
@@ -458,7 +471,7 @@ def render_force_graph(
     height: int = 520,
 ) -> str:
     """
-    渲染纯 SVG 知识图谱 — 增量布局，旧节点不动。
+    渲染动态 SVG 知识图谱 — 混沌→收敛动画 + 脉冲效果
 
     Args:
         nodes: [{"id":"...", "label":"...", "type":"person|evidence|location|time|event"}]
@@ -467,8 +480,12 @@ def render_force_graph(
         width/height: SVG 尺寸
 
     Returns:
-        HTML string with inline SVG visualization
+        HTML string with inline SVG visualization (动画)
     """
+    global _animation_version
+    _animation_version += 1
+    vid = _animation_version
+
     if not nodes:
         return _empty_graph_html("推理开始后，图谱将在此逐步构建")
 
@@ -507,44 +524,67 @@ def render_force_graph(
             "weight": float(e.get("weight", 0.5)),
         })
 
-    # ---- 增量布局 ----
+    # ---- 判断新旧节点（在_incremental_layout之前检查） ----
+    is_first_render = len(_prev_node_keys) == 0
+    old_node_keys_snapshot = set(_prev_node_keys)  # 快照旧节点集合
+
+    # ---- 增量布局 → 最终收敛位置 ----
     canvas_h = max(400, min(580, height))
     pos = _incremental_layout(unique_nodes, unique_edges, width, canvas_h)
 
-    # ---- 判断新旧节点（用于渲染动画） ----
+    # ---- 判断新旧节点（基于布局前快照） ----
     new_node_ids = set()
     for nd in unique_nodes:
-        if nd["id"] not in _prev_node_keys:
+        if nd["id"] not in old_node_keys_snapshot:
             new_node_ids.add(nd["id"])
+
+    # ---- 生成初始混沌位置（用于动画起点）----
+    if is_first_render:
+        chaos_pos = _chaos_positions([nd["id"] for nd in unique_nodes], width, canvas_h)
 
     # ---- Build SVG ----
     svg_parts = []
 
-    # Defs
+    # ---- Defs ----
     svg_parts.append('<defs>')
     svg_parts.append(
-        '<filter id="kg-glow" x="-50%" y="-50%" width="200%" height="200%">'
-        '<feGaussianBlur stdDeviation="3" result="blur"/>'
-        '<feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>'
-        '</filter>'
+        f'<filter id="glow{vid}" x="-50%" y="-50%" width="200%" height="200%">'
+        f'<feGaussianBlur stdDeviation="3" result="blur"/>'
+        f'<feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>'
+        f'</filter>'
     )
-    # 新节点入场动画
     svg_parts.append(
-        '<style>'
-        '@keyframes nodeAppear { from { opacity: 0; transform: scale(0.5); } to { opacity: 1; transform: scale(1); } }'
-        '.node-new { animation: nodeAppear 0.6s ease-out; }'
-        '</style>'
+        f'<filter id="pglow{vid}" x="-80%" y="-80%" width="260%" height="260%">'
+        f'<feGaussianBlur stdDeviation="6" result="blur"/>'
+        f'<feMerge><feMergeNode in="blur"/><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>'
+        f'</filter>'
     )
+    # CSS animations
+    svg_parts.append(f'<style>')
+    svg_parts.append(
+        f'@keyframes sp{vid} {{'
+        f'0%,100% {{ stroke-opacity:0.2; stroke-width:2; }}'
+        f'50% {{ stroke-opacity:0.55; stroke-width:3.5; }}'
+        f'}}'
+    )
+    svg_parts.append(
+        f'@keyframes ef{vid} {{'
+        f'0% {{ opacity:0; }} 100% {{ opacity:1; }}'
+        f'}}'
+    )
+    svg_parts.append(f'.sp{vid} {{ animation: sp{vid} 2.5s ease-in-out infinite; }}')
+    svg_parts.append(f'.ef{vid} {{ animation: ef{vid} 2s ease-out forwards; }}')
+    svg_parts.append('</style>')
     for ntype, color in NODE_COLORS.items():
         svg_parts.append(
-            f'<marker id="arrow-{ntype}" viewBox="0 -5 10 10" refX="26" refY="0" '
+            f'<marker id="a{ntype}{vid}" viewBox="0 -5 10 10" refX="26" refY="0" '
             f'markerWidth="5" markerHeight="5" orient="auto">'
             f'<path d="M0,-5L10,0L0,5" fill="{color}" opacity="0.6"/></marker>'
         )
     svg_parts.append('</defs>')
 
     # ---- Edges ----
-    for e in unique_edges:
+    for idx_e, e in enumerate(unique_edges):
         src = e["source"]
         tgt = e["target"]
         if src not in pos or tgt not in pos:
@@ -554,39 +594,46 @@ def render_force_graph(
         weight = e.get("weight", 0.5)
         opacity = 0.3 + weight * 0.5
         stroke_w = max(1.0, weight * 1.5)
-
-        # 🆕 v14: 按关系类型着色
         edge_label = e.get("label", "")
-        edge_color = _get_edge_color(edge_color if False else edge_label)
-
+        edge_color = _get_edge_color(edge_label)
         src_node = next((n for n in unique_nodes if n["id"] == src), None)
         src_type = src_node["type"] if src_node else "default"
 
-        # 新边的动画 class
-        is_new_edge = src in new_node_ids or tgt in new_node_ids
-        edge_style = f'stroke-opacity:{opacity:.2f}'
-        if is_new_edge:
-            edge_style += ';stroke-dasharray:6,3'
-
-        svg_parts.append(
-            f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" '
-            f'stroke="{edge_color}" stroke-width="{stroke_w:.1f}" '
-            f'style="{edge_style}" '
-            f'marker-end="url(#arrow-{src_type})"/>'
-        )
+        if is_first_render and src in chaos_pos and tgt in chaos_pos:
+            cx1, cy1 = chaos_pos[src]
+            cx2, cy2 = chaos_pos[tgt]
+            delay = idx_e * 0.04
+            svg_parts.append(
+                f'<line stroke="{edge_color}" stroke-width="{stroke_w:.1f}" '
+                f'class="ef{vid}" '
+                f'marker-end="url(#a{src_type}{vid})">'
+                f'<animate attributeName="x1" from="{cx1:.1f}" to="{x1:.1f}" dur="2.5s" fill="freeze" begin="{delay:.2f}s"/>'
+                f'<animate attributeName="y1" from="{cy1:.1f}" to="{y1:.1f}" dur="2.5s" fill="freeze" begin="{delay:.2f}s"/>'
+                f'<animate attributeName="x2" from="{cx2:.1f}" to="{x2:.1f}" dur="2.5s" fill="freeze" begin="{delay:.2f}s"/>'
+                f'<animate attributeName="y2" from="{cy2:.1f}" to="{y2:.1f}" dur="2.5s" fill="freeze" begin="{delay:.2f}s"/>'
+                f'</line>'
+            )
+        else:
+            is_new_edge = src in new_node_ids or tgt in new_node_ids
+            style = f'stroke-opacity:{opacity:.2f}'
+            if is_new_edge:
+                style += f';animation:ef{vid} 0.8s ease-out forwards'
+            svg_parts.append(
+                f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" '
+                f'stroke="{edge_color}" stroke-width="{stroke_w:.1f}" '
+                f'style="{style}" marker-end="url(#a{src_type}{vid})"/>'
+            )
 
         if e.get("label"):
             mx, my = (x1 + x2) / 2, (y1 + y2) / 2
             svg_parts.append(
-                f'<text x="{mx:.1f}" y="{my:.1f}" '
-                f'font-size="9" fill="{edge_color}" text-anchor="middle" '
-                f'font-family="JetBrains Mono,monospace" dy="-4" '
-                f'opacity="0.85">'
-                f'{e["label"]}</text>'
+                f'<text x="{mx:.1f}" y="{my:.1f}" font-size="9" fill="{edge_color}" '
+                f'text-anchor="middle" font-family="JetBrains Mono,monospace" dy="-4" '
+                f'class="ef{vid}">{e["label"]}</text>'
             )
 
     # ---- Nodes ----
-    for nd in unique_nodes:
+    for idx_n, nd in enumerate(unique_nodes):
         if nd["id"] not in pos:
             continue
         x, y = pos[nd["id"]]
@@ -597,49 +644,110 @@ def render_force_graph(
         r = 24 if is_sus else 16
         sw = 3 if is_sus else 1.5
         icon = TYPE_ICONS.get(nd["type"], "•")
-        anim_cls = ' class="node-new"' if is_new else ""
 
+        has_anim = is_first_render and nd["id"] in chaos_pos
+        if has_anim:
+            ix, iy = chaos_pos[nd["id"]]
+        delay = idx_n * 0.03
+
+        anim_cls = ""
+        if is_new and not has_anim:
+            anim_cls = f' class="ef{vid}"'
+
+        # Suspect outer glow ring
         if is_sus:
+            svg_parts.append(f'<g>')
+            outer_r = r + 10
+            if has_anim:
+                svg_parts.append(
+                    f'<circle cx="{ix:.1f}" cy="{iy:.1f}" r="{outer_r}" '
+                    f'fill="none" stroke="{color}" stroke-width="2" '
+                    f'filter="url(#pglow{vid})" class="sp{vid}">'
+                    f'<animate attributeName="cx" from="{ix:.1f}" to="{x:.1f}" dur="2.5s" fill="freeze" begin="{delay:.2f}s"/>'
+                    f'<animate attributeName="cy" from="{iy:.1f}" to="{y:.1f}" dur="2.5s" fill="freeze" begin="{delay:.2f}s"/>'
+                    f'</circle>'
+                )
+            else:
+                svg_parts.append(
+                    f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{outer_r}" '
+                    f'fill="none" stroke="{color}" stroke-width="2" '
+                    f'filter="url(#pglow{vid})" class="sp{vid}"/>'
+                )
+
+        # Main node circle
+        glow_attr = f' filter="url(#glow{vid})"' if is_sus else ""
+        if has_anim:
             svg_parts.append(
                 f'<g{anim_cls}>'
-                f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{r + 10}" '
-                f'fill="none" stroke="{color}" stroke-width="2" '
-                f'stroke-opacity="0.25" filter="url(#kg-glow)"/>'
+                f'<circle cx="{ix:.1f}" cy="{iy:.1f}" r="{r}" '
+                f'fill="{bg}" stroke="{color}" stroke-width="{sw}"{glow_attr}>'
+                f'<animate attributeName="cx" from="{ix:.1f}" to="{x:.1f}" dur="2.5s" fill="freeze" begin="{delay:.2f}s"/>'
+                f'<animate attributeName="cy" from="{iy:.1f}" to="{y:.1f}" dur="2.5s" fill="freeze" begin="{delay:.2f}s"/>'
+                f'</circle>'
+            )
+        else:
+            svg_parts.append(
+                f'<g{anim_cls}>'
+                f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{r}" '
+                f'fill="{bg}" stroke="{color}" stroke-width="{sw}"{glow_attr}/>'
             )
 
-        glow_attr = ' filter="url(#kg-glow)"' if is_sus else ""
-        svg_parts.append(
-            f'<g{anim_cls if not is_sus else ""}>'
-            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{r}" '
-            f'fill="{bg}" stroke="{color}" stroke-width="{sw}"'
-            f'{glow_attr}/>'
-        )
-
-        # Type icon
-        svg_parts.append(
-            f'<text x="{x:.1f}" y="{y:.1f}" '
-            f'font-size="{18 if is_sus else 14}" text-anchor="middle" '
-            f'dominant-baseline="central" style="pointer-events:none">'
-            f'{icon}</text>'
-        )
+        # Icon
+        if has_anim:
+            svg_parts.append(
+                f'<text x="{ix:.1f}" y="{iy:.1f}" '
+                f'font-size="{18 if is_sus else 14}" text-anchor="middle" '
+                f'dominant-baseline="central" style="pointer-events:none">{icon}'
+                f'<animate attributeName="x" from="{ix:.1f}" to="{x:.1f}" dur="2.5s" fill="freeze" begin="{delay:.2f}s"/>'
+                f'<animate attributeName="y" from="{iy:.1f}" to="{y:.1f}" dur="2.5s" fill="freeze" begin="{delay:.2f}s"/>'
+                f'</text>'
+            )
+        else:
+            svg_parts.append(
+                f'<text x="{x:.1f}" y="{y:.1f}" '
+                f'font-size="{18 if is_sus else 14}" text-anchor="middle" '
+                f'dominant-baseline="central" style="pointer-events:none">{icon}</text>'
+            )
 
         # Label
         font_size = 13 if is_sus else 11
-        label_y = y + r + 14
-        svg_parts.append(
-            f'<text x="{x:.1f}" y="{label_y:.1f}" '
-            f'font-size="{font_size}" fill="{color}" text-anchor="middle" '
-            f'font-weight="{700 if is_sus else 500}" '
-            f'font-family="JetBrains Mono,monospace" '
-            f'style="text-shadow:0 0 6px {color};pointer-events:none">'
-            f'{nd["label"]}</text>'
-        )
-
-        if is_sus:
+        ly = y + r + 14
+        if has_anim:
+            ily = iy + r + 14
             svg_parts.append(
-                f'<text x="{x + r - 2:.1f}" y="{y - r + 4:.1f}" '
-                f'font-size="8" fill="#FF003C" font-weight="700">⚠</text>'
+                f'<text x="{ix:.1f}" y="{ily:.1f}" '
+                f'font-size="{font_size}" fill="{color}" text-anchor="middle" '
+                f'font-weight="{700 if is_sus else 500}" '
+                f'font-family="JetBrains Mono,monospace" class="ef{vid}" '
+                f'style="text-shadow:0 0 6px {color};pointer-events:none">{nd["label"]}'
+                f'<animate attributeName="x" from="{ix:.1f}" to="{x:.1f}" dur="2.5s" fill="freeze" begin="{delay:.2f}s"/>'
+                f'<animate attributeName="y" from="{ily:.1f}" to="{ly:.1f}" dur="2.5s" fill="freeze" begin="{delay:.2f}s"/>'
+                f'</text>'
             )
+        else:
+            svg_parts.append(
+                f'<text x="{x:.1f}" y="{ly:.1f}" '
+                f'font-size="{font_size}" fill="{color}" text-anchor="middle" '
+                f'font-weight="{700 if is_sus else 500}" '
+                f'font-family="JetBrains Mono,monospace" class="ef{vid}" '
+                f'style="text-shadow:0 0 6px {color};pointer-events:none">{nd["label"]}</text>'
+            )
+
+        # ⚠ mark
+        if is_sus:
+            wx, wy = x + r - 2, y - r + 4
+            if has_anim:
+                iwx, iwy = ix + r - 2, iy - r + 4
+                svg_parts.append(
+                    f'<text font-size="8" fill="#FF003C" font-weight="700">⚠'
+                    f'<animate attributeName="x" from="{iwx:.1f}" to="{wx:.1f}" dur="2.5s" fill="freeze" begin="{delay:.2f}s"/>'
+                    f'<animate attributeName="y" from="{iwy:.1f}" to="{wy:.1f}" dur="2.5s" fill="freeze" begin="{delay:.2f}s"/>'
+                    f'</text>'
+                )
+            else:
+                svg_parts.append(
+                    f'<text x="{wx:.1f}" y="{wy:.1f}" font-size="8" fill="#FF003C" font-weight="700">⚠</text>'
+                )
 
         svg_parts.append('</g>')
         if is_sus:
