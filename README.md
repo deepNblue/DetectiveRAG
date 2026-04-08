@@ -193,13 +193,142 @@ DGX Spark 集群
 | **ASMR搜索** | System 2（慢思维） | 5个Searcher并行 + 反向排除 + 矛盾检测 | 发现盲点、纠偏、挖掘隐性关联 |
 
 **ASMR矛盾搜索**（Auto-Searching of Missing Revelation）：
+
+ASMR是本系统的核心创新——**"主动搜寻被遗漏的真相"**。与传统RAG的"检索-阅读"模式不同，ASMR采用"假设-验证-纠偏"的主动推理模式，模拟刑侦专家的系统性排查思维。
+
+**5个Searcher并行检索**：
+
 ```
-MotiveSearcher        → 动机分析：利益链 → 动机排序
-OpportunitySearcher   → 机会分析：时间窗口 → 不在场验证
-CapabilitySearcher    → 能力分析：工具/技能 → 能力评估
-TemporalSearcher      → 时序分析：时间线 → 矛盾检测
-ContradictionSearcher → 矛盾搜索：证据冲突 → 盲点评分
+┌─────────────────────────────────────────────────────────┐
+│  ASMR并行搜索架构（Stage 2）                               │
+├─────────────────────────────────────────────────────────┤
+│  MotiveSearcher        → 动机分析                         │
+│    • 利益链挖掘：资金流向/继承关系/商业竞争                   │
+│    • 动机排序：按动机强度×机会×能力综合评分                  │
+│                                                          │
+│  OpportunitySearcher   → 机会分析                         │
+│    • 时间窗口验证：谁在案发时间有作案机会                     │
+│    • 不在场证明核查：验证不在场声明的可信度                   │
+│                                                          │
+│  CapabilitySearcher    → 能力分析                         │
+│    • 工具获取：谁有能力获取作案工具/毒物/凶器                 │
+│    • 技能评估：专业背景/体能/技术能力                        │
+│                                                          │
+│  TemporalSearcher      → 时序分析                         │
+│    • 时间线重构：所有人员的行动轨迹                          │
+│    • 矛盾检测：时间冲突/行为不一致/逻辑漏洞                  │
+│                                                          │
+│  ContradictionSearcher → 矛盾搜索（核心组件）               │
+│    • 候选生成：从RAG+图谱生成所有嫌疑人假设                  │
+│    • 反向排除：对每个假设寻找"为什么不是他"的证据             │
+│    • 矛盾检测：扫描证据链中的逻辑矛盾                        │
+│    • 盲点评分：给每个"被忽视的线索"打分                     │
+└─────────────────────────────────────────────────────────┘
 ```
+
+**ContradictionSearcher核心算法**：
+
+```python
+# Stage 2: ASMR矛盾搜索流程
+def contradiction_search(rag_results, evidence_graph, suspects):
+    # Step 1: 候选生成
+    hypotheses = []
+    for suspect in suspects:
+        hypothesis = {
+            "suspect": suspect,
+            "evidence": rag_results.query(suspect),
+            "graph_neighbors": evidence_graph.get_neighbors(suspect)
+        }
+        hypotheses.append(hypothesis)
+    
+    # Step 2: 反向排除（魔鬼代言人）
+    elimination_results = []
+    for hyp in hypotheses:
+        counter_evidence = search_exonerating_evidence(hyp)
+        if counter_evidence:
+            elimination_results.append({
+                "suspect": hyp["suspect"],
+                "exoneration": counter_evidence,
+                "confidence_penalty": 0.3
+            })
+    
+    # Step 3: 矛盾检测
+    contradictions = []
+    for hyp in hypotheses:
+        # 时间冲突
+        time_conflicts = detect_time_conflicts(hyp["evidence"])
+        # 行为不一致
+        behavior_inconsistencies = detect_behavior_inconsistencies(hyp)
+        # 动机缺失
+        motive_gaps = check_motive_gaps(hyp)
+        
+        contradictions.extend(time_conflicts + behavior_inconsistencies + motive_gaps)
+    
+    # Step 4: 盲点评分
+    blind_spots = []
+    for hyp in hypotheses:
+        # 被忽略的证据
+        overlooked_evidence = find_overlooked_evidence(hyp, rag_results)
+        # 低置信度关联
+        weak_links = find_weak_links(hyp, evidence_graph)
+        
+        blind_spot_score = calculate_blind_spot_score(
+            overlooked_evidence, weak_links
+        )
+        blind_spots.append({
+            "suspect": hyp["suspect"],
+            "score": blind_spot_score,
+            "reasons": overlooked_evidence + weak_links
+        })
+    
+    return {
+        "hypotheses": hypotheses,
+        "eliminations": elimination_results,
+        "contradictions": contradictions,
+        "blind_spots": sorted(blind_spots, key=lambda x: x["score"], reverse=True)
+    }
+```
+
+**ASMR vs 传统RAG对比**：
+
+| 维度 | 传统RAG | ASMR矛盾搜索 |
+|------|---------|-------------|
+| **推理模式** | 被动检索：查询→阅读→回答 | 主动推理：假设→验证→纠偏 |
+| **视角** | 正向确认：寻找支持证据 | 双向验证：支持+反驳证据 |
+| **盲点检测** | 无，容易遗漏关键线索 | 有，主动发现被忽视的证据 |
+| **置信度** | 基于检索相关性 | 基于证据完整性和逻辑一致性 |
+| **适用场景** | 快速定位已知线索 | 发现隐性关联和矛盾 |
+| **资源消耗** | 低（单次检索） | 高（5个Searcher并行） |
+| **准确率贡献** | 基础准确率（40%） | 提升10%（40%→50%） |
+
+**ASMR工作流程**：
+
+```
+Stage 1: 传统RAG
+    ↓ 检索结果 + 证据图谱
+Stage 2: ASMR 5个Searcher并行
+    ├─ MotiveSearcher → 动机分析结果
+    ├─ OpportunitySearcher → 机会分析结果
+    ├─ CapabilitySearcher → 能力分析结果
+    ├─ TemporalSearcher → 时序分析结果
+    └─ ContradictionSearcher → 矛盾+盲点
+    ↓ 融合ASMR结果
+Stage 3: 专家推理
+    ↓ 调查层 + 审判层投票
+Stage 3.3: 反向排除验证
+    ↓ 检查ASMR发现的盲点
+Stage 4: 裁判裁决
+    → 最终结论（考虑ASMR发现的矛盾和盲点）
+```
+
+**v14.0验证案例**：
+
+CASE-002测试中，ASMR成功发现盲点：
+- **投票指向**：孙志强（67%，10/15票）
+- **ASMR发现**：反向排除发现刘建国（主谋）被忽略
+- **裁判推翻**：根据ASMR盲点评分，推翻投票
+- **最终结论**：刘建国（95%），孙志强（执行），马洪涛（销赃）
+- **结果**：✅ 正确！
 
 #### 3. 🕸️ 证据图谱可视化（v3.1）
 
