@@ -415,7 +415,7 @@ def render_force_graph(
         n.y = CY + r * Math.sin(angle);
     }});
 
-    /* ---- Force simulation v2: 分层引力 ---- */
+    /* ---- Force simulation v2: 分层引力 + 核心锚定 ---- */
     var simulation = d3.forceSimulation(nodes)
         /* 连接力: 高权重=短距离(紧密) */
         .force("link", d3.forceLink(links)
@@ -431,22 +431,22 @@ def render_force_graph(
         /* 排斥力: 按节点大小缩放 */
         .force("charge", d3.forceManyBody()
             .strength(function(d) {{
-                if (d.isSuspect) return -500;
-                return -250 - d.degree * 15;
+                if (d.isSuspect) return -600;
+                return -300 - d.degree * 20;
             }})
         )
         /* 中心引力: 按 tier 分层 */
-        .force("center", d3.forceCenter(CX, CY).strength(0.05))
-        /* Tier 引力: 核心(tier1)被拉向中心, 外圈(tier3)可以远离 */
+        .force("center", d3.forceCenter(CX, CY).strength(0.08))
+        /* Tier 引力: 核心(tier1)被强力拉向中心, 外圈(tier3)可远离 */
         .force("tierX", d3.forceX(function(d) {{
-            return CX + (d.tier - 2) * W * 0.02;
+            return CX + (d.tier - 2) * W * 0.01;
         }}).strength(function(d) {{
-            return d.tier === 1 ? 0.08 : (d.tier === 2 ? 0.03 : 0.01);
+            return d.tier === 1 ? 0.25 : (d.tier === 2 ? 0.08 : 0.02);
         }}))
         .force("tierY", d3.forceY(function(d) {{
-            return CY + (d.tier - 2) * H * 0.02;
+            return CY + (d.tier - 2) * H * 0.01;
         }}).strength(function(d) {{
-            return d.tier === 1 ? 0.08 : (d.tier === 2 ? 0.03 : 0.01);
+            return d.tier === 1 ? 0.25 : (d.tier === 2 ? 0.08 : 0.02);
         }}))
         /* 碰撞 */
         .force("collision", d3.forceCollide().radius(function(d) {{
@@ -454,8 +454,8 @@ def render_force_graph(
             if (d.degree >= 5) return 32;
             return 24;
         }}))
-        .alphaDecay(0.02)
-        .velocityDecay(0.3);
+        .alphaDecay(0.015)
+        .velocityDecay(0.35);
 
     /* ---- Draw links (弱关系底层, 强关系上层) ---- */
     var weakLinks = links.filter(function(d) {{ return d.isWeak; }});
@@ -479,8 +479,8 @@ def render_force_graph(
         .attr("stroke", function(d) {{
             return edgeColors[d.relType] || "#555566";
         }})
-        .attr("stroke-width", function(d) {{ return Math.max(1.2, d.weight * 3.5); }})
-        .attr("stroke-opacity", function(d) {{ return 0.3 + d.weight * 0.5; }})
+        .attr("stroke-width", function(d) {{ return Math.max(1.0, d.weight * 1.8); }})
+        .attr("stroke-opacity", function(d) {{ return 0.35 + d.weight * 0.45; }})
         .attr("marker-end", function(d) {{
             var ec = edgeColors[d.relType] || "#555566";
             return "url(#arrow-" + ec.replace("#", "c") + ")";

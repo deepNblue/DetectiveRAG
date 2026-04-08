@@ -268,14 +268,57 @@ def _full_layout(
     height: int,
     iterations: int = 80,
 ) -> Dict[str, Tuple[float, float]]:
-    """完整 Fruchterman-Reingold 布局（首次渲染时使用）"""
+    """完整 Fruchterman-Reingold 布局（首次渲染时使用）— v15.2: 重要性感知布局"""
     n = len(node_ids)
-    pos = {nid: (random.uniform(40, width - 40), random.uniform(40, height - 40))
-           for nid in node_ids}
+    
+    # 🆕 计算节点重要性评分（基于连接度和类型）
+    node_importance = {}
+    for nid in node_ids:
+        # 基础分数
+        score = 0.5
+        
+        # 类型加分: 嫌疑人/证据 > 更重要
+        # 从adj中获取节点信息（adj是nid到节点数据的映射）
+        # 注意：这里的adj实际上是节点ID到邻居集合的映射
+        # 我们需要从原始nodes列表中获取类型信息
+        # 但在这个函数中，我们没有原始nodes列表，只有node_ids
+        # 所以我们暂时只基于连接度评分
+        
+        # 连接度加分
+        deg = len(adj.get(nid, set()))
+        score += min(2.0, deg / 3.0)  # 最多加2.0
+        
+        node_importance[nid] = score
+    
+    # 🆕 按重要性分层放置
+    # Tier 1 (核心): importance >= 1.5 → 内圈 (距中心 50-100px)
+    # Tier 2 (重要): 1.0 <= importance < 1.5 → 中圈 (距中心 150-200px)
+    # Tier 3 (普通): importance < 1.0 → 外圈 (距中心 250-300px)
+    cx, cy = width / 2, height / 2
+    pos = {}
+    
+    for nid in node_ids:
+        importance = node_importance[nid]
+        
+        if importance >= 1.5:
+            # 核心节点 → 内圈
+            r = random.uniform(50, 100)
+            angle = random.uniform(0, 2 * math.pi)
+            pos[nid] = (cx + r * math.cos(angle), cy + r * math.sin(angle))
+        elif importance >= 1.0:
+            # 重要节点 → 中圈
+            r = random.uniform(150, 200)
+            angle = random.uniform(0, 2 * math.pi)
+            pos[nid] = (cx + r * math.cos(angle), cy + r * math.sin(angle))
+        else:
+            # 普通节点 → 外圈
+            r = random.uniform(250, 300)
+            angle = random.uniform(0, 2 * math.pi)
+            pos[nid] = (cx + r * math.cos(angle), cy + r * math.sin(angle))
 
     area = width * height
     k = math.sqrt(area / max(n, 1)) * 0.8
-    temperature = width / 4.0
+    temperature = width / 6.0  # 🔽 降低初始温度，减少节点移动
 
     for iteration in range(iterations):
         disp = {nid: [0.0, 0.0] for nid in node_ids}
@@ -308,6 +351,18 @@ def _full_layout(
                 disp[tgt][0] += fx * 0.3
                 disp[tgt][1] += fy * 0.3
 
+        # 🆕 向心力: 核心节点被拉向中心
+        for nid in node_ids:
+            dx = pos[nid][0] - cx
+            dy = pos[nid][1] - cy
+            dist_to_center = math.sqrt(dx * dx + dy * dy)
+            if dist_to_center > 0:
+                importance = node_importance[nid]
+                # 向心力强度与重要性成正比
+                center_force = importance * 0.8
+                disp[nid][0] -= (dx / dist_to_center) * center_force
+                disp[nid][1] -= (dy / dist_to_center) * center_force
+
         for nid in node_ids:
             dx, dy = disp[nid]
             dist = max(math.sqrt(dx * dx + dy * dy), 0.1)
@@ -316,7 +371,7 @@ def _full_layout(
                 max(25, min(width - 25, pos[nid][0] + (dx / dist) * limited)),
                 max(25, min(height - 25, pos[nid][1] + (dy / dist) * limited)),
             )
-        temperature *= 0.92
+        temperature *= 0.90  # 🔽 降低温度衰减率，让布局更稳定
 
     return pos
 
@@ -424,7 +479,7 @@ def render_force_graph(
         x2, y2 = pos[tgt]
         weight = e.get("weight", 0.5)
         opacity = 0.3 + weight * 0.5
-        stroke_w = max(1.2, weight * 3.5)
+        stroke_w = max(1.0, weight * 1.5)
 
         # 🆕 v14: 按关系类型着色
         edge_label = e.get("label", "")
