@@ -102,9 +102,8 @@ similarities = torch.cosine_similarity(query_emb, embeddings)
 
 本项目使用以下开源模型：
 
-1. **智谱 GLM-4-Flash** - 主推理模型（通过API调用）
-2. **Google Gemma 4 26B** - 视觉分析（NVIDIA NIM本地部署）
-3. **阿里 Qwen3-Embedding-0.6B** - 文本向量化（NVIDIA NIM本地部署）
+1. **Google Gemma 4 26B** - 主推理模型 + 视觉分析（NVIDIA NIM本地部署）
+2. **阿里 Qwen3-Embedding-0.6B** - 文本向量化（NVIDIA NIM本地部署）
 
 我们感谢这些开源项目的贡献者，并承诺在MIT License下开源本项目代码。
 
@@ -215,7 +214,7 @@ for image in case_images:
 ### 作品亮点
 
 1. **🎯 准确率**：在10案测试中达到50%准确率（历史最佳），其中改编案件71.4%
-2. **⚡ 高性能**：GLM-4-Flash单次调用0.6-7s（vs GLM-5.1的20-40s），全案分析<2分钟
+2. **⚡ 高性能**：Gemma 4 26B单次调用0.6-7s，全案分析<2分钟，支持本地化部署
 3. **🔍 可解释**：完整推理链路可回溯，每个结论都有专家支撑
 4. **🧬 进化式**：从30案批量学习中进化出776+技能、664+记忆、30+犯罪模式
 5. **🌐 多模态**：支持文本+图片混合案件，自动跨模态关联
@@ -362,10 +361,10 @@ apply_force_toward_center(node, center_force)
   - 多轮推理Mixin（MAX_ROUNDS=3 + 提前终止）
   - 证据图谱Graphify分析层（God Nodes/社区发现/关键线索）
 - ⚡ **性能优化**：
-  - GLM-4-Flash切换（速度提升10倍）
+  - Gemma 4 26B本地化部署（高速推理）
   - 并发度优化（max_workers=2）
   - 增量图谱布局（重要性感知 + 向心力）
-- 📊 **技术选型**：选择智谱GLM-4-Flash + NVIDIA NIM部署方案
+- 📊 **技术选型**：选择NVIDIA NIM + Gemma 4 26B本地化部署方案
 
 **代码贡献**：
 - `agents/asmr/orchestrator.py` - 核心编排器（500+ 行）
@@ -529,14 +528,14 @@ Round 3: 裁判根据辩论内容裁决
 
 #### 5. 多模型混合推理
 
-**目标**：不同专家使用不同LLM（GPT-4/Claude/GLM/DeepSeek）。
+**目标**：不同专家使用不同LLM（GPT-4/Claude/Qwen/DeepSeek）。
 
 **实现**：
 ```python
 expert_model_mapping = {
     "SherlockAnalyst": "gpt-4",      # 演绎推理
     "HenryLeeAnalyst": "claude-3",   # 物证分析
-    "CriminalExpert": "glm-4-flash", # 心理画像
+    "CriminalExpert": "qwen-max",    # 心理画像
 }
 ```
 
@@ -603,8 +602,8 @@ expert_model_mapping = {
 ### 环境要求
 
 - Python 3.11+
-- 智谱 GLM-4-Flash API Key（或兼容 OpenAI API 的 LLM）
-- 可选：NVIDIA GPU（用于本地部署视觉模型和Embedding模型）
+- NVIDIA GPU（用于本地部署Gemma 4 26B和Qwen3-Embedding模型）
+- 至少16GB显存（推荐24GB+）
 
 ### 安装
 
@@ -616,13 +615,12 @@ pip install -r requirements.txt
 
 ### 配置
 
-编辑 `config/config.yaml`，填入 LLM API 信息：
+编辑 `config/config.yaml`，配置本地部署的模型：
 
 ```yaml
 llm:
-  base_url: "https://open.bigmodel.cn/api/paas/v4/"
-  model: "glm-4-flash-250414"
-  api_key: "your-api-key"
+  base_url: "http://localhost:8094/v1"  # NVIDIA NIM本地部署
+  model: "gemma-4-26B-A4B-it-Q8_0.gguf"
 
 multimodal:
   vl:
