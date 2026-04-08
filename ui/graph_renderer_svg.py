@@ -169,20 +169,24 @@ def _incremental_layout(
     for nid in old_ids:
         pos[nid] = _prev_positions[nid]
 
-    # 新节点: 放置在已有邻居附近
+    # 新节点: 放置在已有邻居附近，但优先靠近中心
     if new_ids:
         for nid in new_ids:
             # 找到已有关联的邻居（位置已确定）
             placed_neighbors = [nb for nb in adj.get(nid, set()) if nb in pos]
             if placed_neighbors:
-                # 取第一个邻居的位置，加随机偏移
-                bx, by = pos[placed_neighbors[0]]
-                pos[nid] = (bx + random.uniform(-50, 50),
-                            by + random.uniform(-50, 50))
+                # 取邻居的平均位置
+                avg_x = sum(pos[nb][0] for nb in placed_neighbors) / len(placed_neighbors)
+                avg_y = sum(pos[nb][1] for nb in placed_neighbors) / len(placed_neighbors)
+                # 在邻居中心和画布中心之间插值（拉向中心）
+                target_x = avg_x * 0.6 + (width / 2) * 0.4
+                target_y = avg_y * 0.6 + (height / 2) * 0.4
+                pos[nid] = (target_x + random.uniform(-30, 30),
+                            target_y + random.uniform(-30, 30))
             else:
-                # 无邻居，随机放在画布上
-                pos[nid] = (random.uniform(40, width - 40),
-                            random.uniform(40, height - 40))
+                # 无邻居，放在画布中心附近
+                pos[nid] = (width / 2 + random.uniform(-60, 60),
+                            height / 2 + random.uniform(-60, 60))
 
         # ---- 只对新节点做弹簧迭代（旧节点不动）----
         area = width * height
@@ -252,6 +256,11 @@ def _incremental_layout(
         # 全新图谱（没有任何旧节点）— 完整布局
         pos = _full_layout(node_ids, edges, adj, width, height, iterations)
 
+    else:
+        # 有旧节点也有新节点 — 新节点布局后，对已有节点做轻量约束
+        # 确保旧节点不会因为新节点加入而偏离合理位置
+        pass
+
     # 缓存
     _prev_positions.update(pos)
     _prev_node_keys = current_node_keys
@@ -266,76 +275,115 @@ def _full_layout(
     adj: Dict[str, set],
     width: int,
     height: int,
-    iterations: int = 80,
+    iterations: int = 100,
 ) -> Dict[str, Tuple[float, float]]:
-    """完整 Fruchterman-Reingold 布局（首次渲染时使用）— v15.2: 重要性感知布局"""
-    n = len(node_ids)
+    """完整 Fruchterman-Reingold 布局 — v15.3: 核心锚定辐射布局
     
-    # 🆕 计算节点重要性评分（基于连接度和类型）
+    核心思路: 高连接度节点(嫌疑人/受害者)强力锚定在中心，
+    证据节点环绕在中圈，时间/地点松散分布在外圈。
+    """
+    n = len(node_ids)
+    cx, cy = width / 2, height / 2
+    min_dim = min(width, height)
+    
+    # ---- 计算节点重要性(基于连接度) ----
     node_importance = {}
+    max_deg = max((len(adj.get(nid, set())) for nid in node_ids), default=1)
+    max_deg = max(max_deg, 1)
+    
     for nid in node_ids:
-        # 基础分数
-        score = 0.5
-        
-        # 类型加分: 嫌疑人/证据 > 更重要
-        # 从adj中获取节点信息（adj是nid到节点数据的映射）
-        # 注意：这里的adj实际上是节点ID到邻居集合的映射
-        # 我们需要从原始nodes列表中获取类型信息
-        # 但在这个函数中，我们没有原始nodes列表，只有node_ids
-        # 所以我们暂时只基于连接度评分
-        
-        # 连接度加分
         deg = len(adj.get(nid, set()))
-        score += min(2.0, deg / 3.0)  # 最多加2.0
-        
+        # 归一化到 0.3 ~ 3.0
+        score = 0.3 + (deg / max_deg) * 2.7
         node_importance[nid] = score
     
-    # 🆕 按重要性分层放置
-    # Tier 1 (核心): importance >= 1.5 → 内圈 (距中心 50-100px)
-    # Tier 2 (重要): 1.0 <= importance < 1.5 → 中圈 (距中心 150-200px)
-    # Tier 3 (普通): importance < 1.0 → 外圈 (距中心 250-300px)
-    cx, cy = width / 2, height / 2
-    pos = {}
-    
+    # ---- 分层同心环初始放置 ----
+    # Tier1 (核心, deg >= 3): 内圈 r=25-60px → 嫌疑人/高连接受害者
+    # Tier2 (重要, deg == 2): 中圈内环 r=100-150px → 高连接证据
+    # Tier2b (一般, deg == 1): 中圈外环 r=160-210px → 低连接人物/证据
+    # Tier3 (普通, deg = 0): 外圈 r=220-260px → 孤立节点
+    tiers = {}
     for nid in node_ids:
-        importance = node_importance[nid]
-        
-        if importance >= 1.5:
-            # 核心节点 → 内圈
-            r = random.uniform(50, 100)
-            angle = random.uniform(0, 2 * math.pi)
-            pos[nid] = (cx + r * math.cos(angle), cy + r * math.sin(angle))
-        elif importance >= 1.0:
-            # 重要节点 → 中圈
-            r = random.uniform(150, 200)
-            angle = random.uniform(0, 2 * math.pi)
-            pos[nid] = (cx + r * math.cos(angle), cy + r * math.sin(angle))
+        deg = len(adj.get(nid, set()))
+        if deg >= 3:
+            tiers[nid] = 1
+        elif deg >= 2:
+            tiers[nid] = 2
+        elif deg >= 1:
+            tiers[nid] = 2  # deg=1 也在中圈，但半径更大
         else:
-            # 普通节点 → 外圈
-            r = random.uniform(250, 300)
-            angle = random.uniform(0, 2 * math.pi)
-            pos[nid] = (cx + r * math.cos(angle), cy + r * math.sin(angle))
-
+            tiers[nid] = 3
+    
+    tier_counts = {1: 0, 2: 0, 3: 0}
+    for nid in node_ids:
+        tier_counts[tiers[nid]] += 1
+    
+    tier_idx = {1: 0, 2: 0, 3: 0}
+    pos = {}
+    for nid in node_ids:
+        t = tiers[nid]
+        deg = len(adj.get(nid, set()))
+        count = tier_counts[t]
+        
+        # 按度数细分半径: 同层内高度数更靠内
+        if t == 1:
+            r = random.uniform(25, min(60, min_dim * 0.08))
+        elif t == 2 and deg >= 2:
+            r = random.uniform(min_dim * 0.15, min_dim * 0.25)
+        elif t == 2 and deg == 1:
+            r = random.uniform(min_dim * 0.28, min_dim * 0.38)
+        else:
+            r = random.uniform(min_dim * 0.40, min_dim * 0.46)
+        
+        # 均匀角度分布
+        angle = (tier_idx[t] / max(count, 1)) * 2 * math.pi + random.uniform(-0.15, 0.15)
+        tier_idx[t] += 1
+        pos[nid] = (cx + r * math.cos(angle), cy + r * math.sin(angle))
+    
+    # ---- FR 布局迭代，带核心锚定 ----
     area = width * height
-    k = math.sqrt(area / max(n, 1)) * 0.8
-    temperature = width / 6.0  # 🔽 降低初始温度，减少节点移动
+    k = math.sqrt(area / max(n, 1)) * 0.75
+    temperature = width / 8.0  # 降低初始温度，减少位移
+
+    # 各层级最大离中心距离（硬约束）— 按度数细分
+    max_radius = {}
+    for nid in node_ids:
+        deg = len(adj.get(nid, set()))
+        t = tiers[nid]
+        if t == 1:
+            max_radius[nid] = min_dim * 0.12
+        elif deg >= 2:
+            max_radius[nid] = min_dim * 0.28  # 高连接证据: 内中圈
+        else:
+            max_radius[nid] = min_dim * 0.46  # 低连接: 外圈
 
     for iteration in range(iterations):
         disp = {nid: [0.0, 0.0] for nid in node_ids}
 
+        # ---- 排斥力（按层级缩放: 核心节点排斥力弱，避免推散）----
         for i in range(n):
             for j in range(i + 1, n):
-                dx = pos[node_ids[i]][0] - pos[node_ids[j]][0]
-                dy = pos[node_ids[i]][1] - pos[node_ids[j]][1]
+                ni, nj = node_ids[i], node_ids[j]
+                dx = pos[ni][0] - pos[nj][0]
+                dy = pos[ni][1] - pos[nj][1]
                 dist = max(math.sqrt(dx * dx + dy * dy), 0.1)
-                force = (k * k) / dist
+                
+                # 排斥力缩放: 核心节点排斥力更弱（不互相推散）
+                scale = 1.0
+                if tiers[ni] == 1 and tiers[nj] == 1:
+                    scale = 0.3  # 核心↔核心: 弱排斥
+                elif tiers[ni] == 1 or tiers[nj] == 1:
+                    scale = 0.6  # 核心↔其他: 中等排斥
+                
+                force = (k * k) / dist * scale
                 fx = (dx / dist) * force
                 fy = (dy / dist) * force
-                disp[node_ids[i]][0] += fx
-                disp[node_ids[i]][1] += fy
-                disp[node_ids[j]][0] -= fx
-                disp[node_ids[j]][1] -= fy
+                disp[ni][0] += fx
+                disp[ni][1] += fy
+                disp[nj][0] -= fx
+                disp[nj][1] -= fy
 
+        # ---- 弹簧吸引力（边连接）----
         for e in edges:
             src = _safe_id(e.get("source", "?"))
             tgt = _safe_id(e.get("target", "?"))
@@ -343,35 +391,61 @@ def _full_layout(
                 dx = pos[src][0] - pos[tgt][0]
                 dy = pos[src][1] - pos[tgt][1]
                 dist = max(math.sqrt(dx * dx + dy * dy), 0.1)
-                force = (dist * dist) / k
+                
+                # 弹簧强度: 核心↔核心连线更强(拉紧), 其他适中
+                spring_k = 0.4
+                if tiers.get(src, 3) == 1 and tiers.get(tgt, 3) == 1:
+                    spring_k = 0.8  # 核心↔核心: 强弹簧
+                
+                force = (dist * dist) / k * spring_k
                 fx = (dx / dist) * force
                 fy = (dy / dist) * force
-                disp[src][0] -= fx * 0.3
-                disp[src][1] -= fy * 0.3
-                disp[tgt][0] += fx * 0.3
-                disp[tgt][1] += fy * 0.3
+                disp[src][0] -= fx
+                disp[src][1] -= fy
+                disp[tgt][0] += fx
+                disp[tgt][1] += fy
 
-        # 🆕 向心力: 核心节点被拉向中心
+        # ---- 向心力: 按层级差异化 ----
         for nid in node_ids:
             dx = pos[nid][0] - cx
             dy = pos[nid][1] - cy
             dist_to_center = math.sqrt(dx * dx + dy * dy)
-            if dist_to_center > 0:
-                importance = node_importance[nid]
-                # 向心力强度与重要性成正比
-                center_force = importance * 0.8
+            if dist_to_center > 1:
+                # 向心力强度: 核心(强) > 重要(中) > 普通(弱)
+                if tiers[nid] == 1:
+                    center_force = 3.5  # 超强锚定
+                elif tiers[nid] == 2:
+                    center_force = 1.2
+                else:
+                    center_force = 0.3
                 disp[nid][0] -= (dx / dist_to_center) * center_force
                 disp[nid][1] -= (dy / dist_to_center) * center_force
 
+        # ---- 应用力 + 硬性距离约束 ----
         for nid in node_ids:
             dx, dy = disp[nid]
             dist = max(math.sqrt(dx * dx + dy * dy), 0.1)
             limited = min(dist, temperature)
-            pos[nid] = (
-                max(25, min(width - 25, pos[nid][0] + (dx / dist) * limited)),
-                max(25, min(height - 25, pos[nid][1] + (dy / dist) * limited)),
-            )
-        temperature *= 0.90  # 🔽 降低温度衰减率，让布局更稳定
+            new_x = pos[nid][0] + (dx / dist) * limited
+            new_y = pos[nid][1] + (dy / dist) * limited
+            
+            # 硬约束: 各节点不超出最大半径
+            ddx = new_x - cx
+            ddy = new_y - cy
+            new_dist = math.sqrt(ddx * ddx + ddy * ddy)
+            mr = max_radius[nid]
+            if new_dist > mr:
+                scale = mr / new_dist
+                new_x = cx + ddx * scale
+                new_y = cy + ddy * scale
+            
+            # 边界约束
+            pad = 25
+            new_x = max(pad, min(width - pad, new_x))
+            new_y = max(pad, min(height - pad, new_y))
+            pos[nid] = (new_x, new_y)
+            
+        temperature *= 0.88  # 温度衰减
 
     return pos
 
