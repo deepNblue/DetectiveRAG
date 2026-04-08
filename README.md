@@ -1,5 +1,11 @@
 <div align="center">
 
+![WebUI Screenshot](docs/images/webui_screenshot.jpg)
+
+*WebUI 推理界面 — 忒修斯之线启动画面*
+
+---
+
 # 🧵 忒修斯之线
 
 ### **Ariadne's Thread — Multi-Agent Criminal Investigation RAG**
@@ -9,18 +15,6 @@
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://python.org)
 [![Gradio](https://img.shields.io/badge/Gradio-v14.0-FF6F00?logo=gradio&logoColor=white)](https://gradio.app)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-
-</div>
-
----
-
-## 📸 系统截图
-
-<div align="center">
-
-![WebUI Screenshot](docs/images/webui_screenshot.jpg)
-
-*WebUI 推理界面 — 忒修斯之线启动画面*
 
 </div>
 
