@@ -21,9 +21,9 @@
 ## 📋 目录
 
 - [项目概述](#-项目概述)
+- [NVIDIA工具平台](#-nvidia工具平台)
 - [作品介绍](#-作品介绍)
 - [技术创新点](#-技术创新点)
-- [NVIDIA工具平台](#-nvidia工具平台)
 - [团队贡献](#-团队贡献)
 - [未来展望](#-未来展望)
 - [快速开始](#-快速开始)
@@ -49,12 +49,64 @@
 2. **多维推理验证**：18名虚拟专家从不同角度分析，避免单一视角盲区
 3. **发现隐蔽线索**：通过证据图谱和矛盾搜索，挖掘人工难以发现的关联
 4. **提供推理依据**：完整的推理链路可回溯，辅助决策而非替代决策
+5. **本地化部署**：建设本地化大模型软硬件平台，实现闭网环境下大模型应用，满足办案系统安全要求
 
 ### 核心理念
 
 > *"每根线都是新的自己"*
 
 系统以忒修斯之线为隐喻：每一条证据链、每一次推理迭代，都是在保留核心真相的同时不断更新自我。我们相信AI不是要替代侦探，而是成为侦探的"数字助手"，在复杂的信息海洋中提供导航。
+
+---
+
+## 🚀 NVIDIA工具平台
+
+### 使用的NVIDIA技术
+
+#### 1. NVIDIA NIM微服务
+
+本项目使用NVIDIA NIM提供的开源模型：
+
+| 模型 | 用途 | 部署方式 | 性能 |
+|------|------|---------|------|
+| **Gemma 4 26B** | 视觉分析 | NVIDIA NIM本地部署（vLLM） | 8094端口，Q8_0量化 |
+| **Qwen3-Embedding-0.6B** | 文本向量化 | NVIDIA NIM本地部署 | 9094端口，1024维向量 |
+
+**部署配置**：
+```yaml
+multimodal:
+  vl:
+    base_url: "http://106.13.186.155:8094/v1"
+    model: "gemma-4-26B-A4B-it-Q8_0.gguf"
+
+embedding:
+  base_url: "http://106.13.186.155:9094/v1"
+  model: "Qwen3-Embedding-0.6B"
+```
+
+#### 2. NVIDIA Tensor Core加速
+
+- **向量检索**：Qwen3-Embedding在NVIDIA GPU上运行，支持大规模向量相似度计算
+- **多模态推理**：Gemma 4 26B利用Tensor Core加速视觉编码和文本生成
+
+#### 3. NVIDIA CUDA优化
+
+```python
+# 批量向量检索（CUDA加速）
+import torch
+embeddings = model.encode(texts, device="cuda")  # GPU加速
+similarities = torch.cosine_similarity(query_emb, embeddings)
+```
+
+### 开源模型贡献
+
+本项目使用以下开源模型：
+
+1. **智谱 GLM-4-Flash** - 主推理模型（通过API调用）
+2. **Google Gemma 4 26B** - 视觉分析（NVIDIA NIM本地部署）
+3. **阿里 Qwen3-Embedding-0.6B** - 文本向量化（NVIDIA NIM本地部署）
+
+我们感谢这些开源项目的贡献者，并承诺在MIT License下开源本项目代码。
 
 ---
 
@@ -280,57 +332,6 @@ apply_force_toward_center(node, center_force)
 ```
 
 **用途**：推理过程完全可回溯，支持事后审计和案例分析。
-
----
-
-## 🚀 NVIDIA工具平台
-
-### 使用的NVIDIA技术
-
-#### 1. NVIDIA NIM微服务
-
-本项目使用NVIDIA NIM提供的开源模型：
-
-| 模型 | 用途 | 部署方式 | 性能 |
-|------|------|---------|------|
-| **Gemma 4 26B** | 视觉分析 | NVIDIA NIM本地部署（vLLM） | 8094端口，Q8_0量化 |
-| **Qwen3-Embedding-0.6B** | 文本向量化 | NVIDIA NIM本地部署 | 9094端口，1024维向量 |
-
-**部署配置**：
-```yaml
-multimodal:
-  vl:
-    base_url: "http://106.13.186.155:8094/v1"
-    model: "gemma-4-26B-A4B-it-Q8_0.gguf"
-
-embedding:
-  base_url: "http://106.13.186.155:9094/v1"
-  model: "Qwen3-Embedding-0.6B"
-```
-
-#### 2. NVIDIA Tensor Core加速
-
-- **向量检索**：Qwen3-Embedding在NVIDIA GPU上运行，支持大规模向量相似度计算
-- **多模态推理**：Gemma 4 26B利用Tensor Core加速视觉编码和文本生成
-
-#### 3. NVIDIA CUDA优化
-
-```python
-# 批量向量检索（CUDA加速）
-import torch
-embeddings = model.encode(texts, device="cuda")  # GPU加速
-similarities = torch.cosine_similarity(query_emb, embeddings)
-```
-
-### 开源模型贡献
-
-本项目使用以下开源模型：
-
-1. **智谱 GLM-4-Flash** - 主推理模型（通过API调用）
-2. **Google Gemma 4 26B** - 视觉分析（NVIDIA NIM本地部署）
-3. **阿里 Qwen3-Embedding-0.6B** - 文本向量化（NVIDIA NIM本地部署）
-
-我们感谢这些开源项目的贡献者，并承诺在MIT License下开源本项目代码。
 
 ---
 
