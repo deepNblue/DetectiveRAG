@@ -51,7 +51,7 @@ class ASMROrchestrator:
     Stage 4: 裁判Agent — 综合投票+矛盾分析，最终裁决
     """
 
-    def __init__(self, llm_client=None, config: Dict[str, Any] = None, max_workers: int = 4, event_bus=None, conversation_store=None):
+    def __init__(self, llm_client=None, config: Dict[str, Any] = None, max_workers: int = 2, event_bus=None, conversation_store=None):
         self.llm_client = llm_client
         self.config = config or {}
         self.max_workers = max_workers
@@ -372,45 +372,61 @@ class ASMROrchestrator:
         enhanced_text = case_text + image_context
 
         # ==========================================
-        # 🆕 v13: Stage 0.5 图片证据图谱构建 (参考 RAG-Anything)
+        # 🆕 v15.2: Stage 0.5 证据图谱构建 (文本+图片)
         # ==========================================
         evidence_graph_data = {}
-        if image_descriptions:
-            try:
-                graph_builder = EvidenceGraphBuilder(
-                    llm_client=self.llm_client,
-                    context_extractor=ContextExtractor(),
-                )
+        try:
+            graph_builder = EvidenceGraphBuilder(
+                llm_client=self.llm_client,
+                context_extractor=ContextExtractor(),
+            )
+
+            if image_descriptions:
+                # 有图片：构建完整图谱 (图片实体 + 跨模态关联)
                 evidence_graph_data = graph_builder.build_from_image_analyses(
                     image_descriptions=image_descriptions,
                     suspects=suspects,
-                    case_text=case_text,  # 原始案件文本(不含图片分析)用于上下文提取
+                    case_text=case_text,
                 )
-                # 将图谱文本注入 enhanced_text
-                graph_text = evidence_graph_data.get("graph_text", "")
-                if graph_text:
-                    enhanced_text += graph_text
-                
-                graph_stats = evidence_graph_data.get("stats", {})
-                cross_links = evidence_graph_data.get("cross_modal_links", [])
-                contradictions = evidence_graph_data.get("contradiction_hints", [])
-                retrieval_chunks = evidence_graph_data.get("retrieval_chunks", [])
-                self.logger.info(f"🕸️ Stage 0.5: 证据图谱构建完成 — "
-                                 f"节点={graph_stats.get('total_nodes', 0)}, "
-                                 f"边={graph_stats.get('total_edges', 0)}, "
-                                 f"跨模态关联={len(cross_links)}, "
-                                 f"检索chunks={len(retrieval_chunks)}")
-                if cross_links:
-                    for link in cross_links[:5]:
-                        self.logger.info(f"  🔗 {link['image_entity']} ↔ {link['suspect_name']} "
-                                         f"({link['link_type']}, {link['confidence']:.0%})")
-                if contradictions:
-                    for c in contradictions[:3]:
-                        self.logger.warning(f"  ⚠️ 图谱矛盾: {c['type']} — {c.get('entity', '?')}")
-            except Exception as e:
-                self.logger.warning(f"  ⚠️ 证据图谱构建失败: {e}")
-                import traceback
-                self.logger.debug(traceback.format_exc())
+                self.logger.info(f"🕸️ Stage 0.5: 图片图谱构建完成 — "
+                                 f"节点={evidence_graph_data.get('stats', {}).get('total_nodes', 0)}, "
+                                 f"边={evidence_graph_data.get('stats', {}).get('total_edges', 0)}")
+            else:
+                # 无图片：从案件文本构建图谱 (v15.2 新增)
+                evidence_graph_data = graph_builder.build_from_text(
+                    case_text=enhanced_text or case_text,
+                    suspects=suspects,
+                )
+                self.logger.info(f"🕸️ Stage 0.5: 文本图谱构建完成 — "
+                                 f"节点={evidence_graph_data.get('stats', {}).get('total_nodes', 0)}, "
+                                 f"边={evidence_graph_data.get('stats', {}).get('total_edges', 0)}, "
+                                 f"文本关系={evidence_graph_data.get('stats', {}).get('text_relations', 0)}")
+
+            # 将图谱文本注入 enhanced_text
+            graph_text = evidence_graph_data.get("graph_text", "")
+            if graph_text:
+                enhanced_text += graph_text
+
+            graph_stats = evidence_graph_data.get("stats", {})
+            cross_links = evidence_graph_data.get("cross_modal_links", [])
+            contradictions = evidence_graph_data.get("contradiction_hints", [])
+            retrieval_chunks = evidence_graph_data.get("retrieval_chunks", [])
+            self.logger.info(f"🕸️ Stage 0.5 汇总: "
+                             f"节点={graph_stats.get('total_nodes', 0)}, "
+                             f"边={graph_stats.get('total_edges', 0)}, "
+                             f"跨模态关联={len(cross_links)}, "
+                             f"检索chunks={len(retrieval_chunks)}")
+            if cross_links:
+                for link in cross_links[:5]:
+                    self.logger.info(f"  🔗 {link['image_entity']} ↔ {link['suspect_name']} "
+                                     f"({link['link_type']}, {link['confidence']:.0%})")
+            if contradictions:
+                for c in contradictions[:3]:
+                    self.logger.warning(f"  ⚠️ 图谱矛盾: {c['type']} — {c.get('entity', '?')}")
+        except Exception as e:
+            self.logger.warning(f"  ⚠️ 证据图谱构建失败: {e}")
+            import traceback
+            self.logger.debug(traceback.format_exc())
 
         # ==========================================
         # Stage 1: 3个Reader并行摄取

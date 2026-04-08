@@ -1,6 +1,6 @@
 """
-多轮推理对话Mixin (Multi-Round Reasoning Mixin) v3
-让专家Agent从"一次LLM调用"升级为"多轮深度推理"（最多10轮）。
+多轮推理对话Mixin (Multi-Round Reasoning Mixin) v4
+让专家Agent从"一次LLM调用"升级为"多轮深度推理"（最多3轮）。
 
 设计原则:
 - 非侵入式: 不要求每个专家重写，通过Mixin自动增强
@@ -10,10 +10,7 @@
 核心流程:
   Round 1: 初步分析 — 专家原有prompt，形成假设
   Round 2: 自我审视 — 审查初步结论，找弱点/偏见/盲点
-  Round 3: 深入调查 — 聚焦疑点，重新审视被忽略的嫌疑人
-  Round 4: 最终整合 — 综合所有轮次，给出判断
-  Round 5-10: 动态深入 — 从不同角度继续审视，直到置信度≥阈值或达到上限
-    角度: 时间线验证→动机深度→证据链完整性→行为逻辑→间接证据交叉→心理学分析
+  Round 3: 深入调查 — 聚焦疑点，给出最终判断
 """
 
 import json
@@ -39,7 +36,7 @@ class MultiRoundMixin:
               # parsed 已经是完整的JSON结果
     """
 
-    MAX_ROUNDS = 10
+    MAX_ROUNDS = 3
     EARLY_STOP_CONFIDENCE = 0.85
     MIN_REASONING_LEN = 200
 
@@ -291,176 +288,16 @@ class MultiRoundMixin:
         else:
             logger.info(f"🔄 [{expert_name}] R3维持: {r3_culprit} conf={r3_confidence:.2f}")
 
-        # ==========================================
-        # Round 4: 最终整合
-        # ==========================================
-        logger.info(f"🔄 [{expert_name}] Round 4/{self.MAX_ROUNDS}: 最终整合")
-
-        r4_prompt = f"""你是{expert_role}，已完成三轮分析。请做最终整合。
-
-## 三轮分析汇总
-- R1 初步: {r1_culprit} (conf={r1_confidence})
-- R2 审查: {r2_verdict}, {len(r2_flaws)}个漏洞, {len(r2_overlooked)}个被忽略
-- R3 深入: {r3_culprit} (conf={r3_confidence}){' ⚠️改变了结论!' if changed else ''}
-
-## R3的推理
-{r3_reasoning[:800]}
-
-## R3对逻辑漏洞的回应
-{json.dumps(r3_parsed.get('answer_to_flaws', []), ensure_ascii=False)[:400]}
-
-## R3关键证据
-{json.dumps(r3_parsed.get('key_evidence', []), ensure_ascii=False)[:400]}
-
-请综合三轮分析给出最终判断:
-{{
-    "culprit": "最终真凶判断",
-    "confidence": 0.0-1.0,
-    "reasoning": "综合三轮的完整推理过程",
-    "key_evidence": ["支撑结论的关键证据"],
-    "unresolved_questions": ["仍无法解答的问题"]
-}}
-
-要求:
-1. reasoning必须整合三轮关键发现
-2. 如果结论在轮次间摇摆，应降低confidence
-3. 只返回JSON"""
-
-        r4_response = self.call_llm(r4_prompt, temperature=0.3)
-        r4_parsed = self.extract_json_from_response(r4_response)
-
-        if not r4_parsed or not isinstance(r4_parsed, dict):
-            logger.warning(f"🔄 [{expert_name}] R4 JSON解析失败，使用R3结果")
-            r3_parsed["reasoning"] = (
-                f"[多轮推理 R1={r1_culprit}({r1_confidence:.2f})→"
-                f"R2({r2_verdict})→"
-                f"R3={r3_culprit}({r3_confidence:.2f})]\n\n{r3_reasoning}"
-            )
-            r3_parsed["_rounds"] = rounds_log
-            r3_parsed["_total_rounds"] = 3
-            return r3_parsed
-
-        final_culprit = r4_parsed.get("culprit", r3_culprit)
-        final_confidence = r4_parsed.get("confidence", r3_confidence)
-        final_reasoning = r4_parsed.get("reasoning", r3_reasoning)
-
-        rounds_log.append({
-            "round": 4, "phase": "final",
-            "culprit": final_culprit, "confidence": final_confidence,
-        })
-
-        # 添加多轮推理前缀到reasoning
-        r4_parsed["culprit"] = final_culprit
-        r4_parsed["confidence"] = final_confidence
-        r4_parsed["reasoning"] = (
+        # Round 3 即最终结果
+        r3_parsed["reasoning"] = (
             f"[多轮推理 R1={r1_culprit}({r1_confidence:.2f})→"
             f"R2({r2_verdict},{len(r2_flaws)}漏洞)→"
-            f"R3={r3_culprit}({r3_confidence:.2f})→"
-            f"R4={final_culprit}({final_confidence:.2f})]\n\n{final_reasoning}"
+            f"R3={r3_culprit}({r3_confidence:.2f})]\n\n{r3_reasoning}"
         )
-        r4_parsed["_rounds"] = rounds_log
-        r4_parsed["_total_rounds"] = 4
+        r3_parsed["_rounds"] = rounds_log
+        r3_parsed["_total_rounds"] = 3
+        r3_parsed["_early_stop"] = False
 
-        logger.info(f"🔄 [{expert_name}] R4完成: {final_culprit} ({final_confidence:.2f})")
+        logger.info(f"🔄 [{expert_name}] 多轮完成(3轮): R1={r1_culprit}→R3={r3_culprit} ({r3_confidence:.2f})")
 
-        # ==========================================
-        # Round 5-10: 动态深入轮 — 当置信度不够高时继续深入
-        # 每轮聚焦一个新角度，直到置信度≥阈值或达到MAX_ROUNDS
-        # ==========================================
-        current_culprit = final_culprit
-        current_confidence = final_confidence
-        current_reasoning = final_reasoning
-        current_result = r4_parsed
-        
-        # 不同的审视角度，轮流使用
-        review_angles = [
-            ("时间线验证", "严格验证时间线是否完全排除其他嫌疑人"),
-            ("动机深度分析", "重新评估所有嫌疑人的动机强度和可信度"),
-            ("证据链完整性", "检查证据链是否有断裂，是否有其他解释"),
-            ("行为逻辑审查", "分析嫌疑人案发前后的行为是否合理"),
-            ("间接证据交叉验证", "将所有间接证据交叉对比，寻找矛盾"),
-            ("心理学分析", "从犯罪心理学角度分析真凶的行为模式"),
-        ]
-
-        for round_num in range(5, self.MAX_ROUNDS + 1):
-            # 提前终止检查
-            if current_confidence >= self.EARLY_STOP_CONFIDENCE:
-                logger.info(f"🔄 [{expert_name}] R{round_num}提前终止: conf={current_confidence:.2f}≥{self.EARLY_STOP_CONFIDENCE}")
-                break
-
-            angle_name, angle_desc = review_angles[(round_num - 5) % len(review_angles)]
-            logger.info(f"🔄 [{expert_name}] Round {round_num}/{self.MAX_ROUNDS}: {angle_name}")
-
-            rN_prompt = f"""你是{expert_role}，已进行{round_num-1}轮分析。现在进行「{angle_name}」。
-
-## 当前结论: {current_culprit} (置信度={current_confidence})
-## 已有推理历程:
-{current_reasoning[:1000]}
-
-## 审查焦点: {angle_desc}
-
-## 所有嫌疑人
-{', '.join(suspect_names)}
-
-请从「{angle_name}」角度重新审视当前结论:
-{{
-    "culprit": "最终判断（可以维持或改变）",
-    "confidence": 0.0-1.0,
-    "reasoning": "本轮分析的推理过程",
-    "key_insight": "本轮发现的最关键洞察",
-    "conclusion_changed": true/false,
-    "confidence_trend": "上升/持平/下降"
-}}
-
-要求:
-1. 聚焦{angle_name}角度，不要泛泛而谈
-2. 如果当前结论经得起审查，只微调置信度
-3. 如果发现严重问题，果断改变结论
-4. 只返回JSON"""
-
-            rN_response = self.call_llm(rN_prompt, temperature=0.3)
-            rN_parsed = self.extract_json_from_response(rN_response)
-
-            if not rN_parsed or not isinstance(rN_parsed, dict):
-                logger.warning(f"🔄 [{expert_name}] R{round_num} JSON解析失败，保持当前结论")
-                continue
-
-            rN_culprit = rN_parsed.get("culprit", current_culprit)
-            rN_confidence = rN_parsed.get("confidence", current_confidence)
-            changed = rN_culprit != current_culprit
-
-            rounds_log.append({
-                "round": round_num, "phase": angle_name,
-                "culprit": rN_culprit, "confidence": rN_confidence,
-                "changed": changed,
-            })
-
-            if changed:
-                logger.info(f"🔄 [{expert_name}] R{round_num}结论改变! {current_culprit} → {rN_culprit}")
-            else:
-                logger.info(f"🔄 [{expert_name}] R{round_num}维持: {rN_culprit} conf={rN_confidence:.2f}")
-
-            current_culprit = rN_culprit
-            current_confidence = rN_confidence
-            current_reasoning = rN_parsed.get("reasoning", current_reasoning)
-            current_result = rN_parsed
-
-        # 最终整合
-        actual_rounds = len(rounds_log)
-        current_result["culprit"] = current_culprit
-        current_result["confidence"] = current_confidence
-        
-        # 构建推理演进摘要
-        evolution = "→".join([f"R{r['round']}({r.get('culprit','?')[:3]})" for r in rounds_log])
-        existing_reasoning = current_result.get("reasoning", current_reasoning)
-        current_result["reasoning"] = (
-            f"[多轮推理 {evolution}]\n\n{existing_reasoning}"
-        )
-        current_result["_rounds"] = rounds_log
-        current_result["_total_rounds"] = actual_rounds
-        current_result["_early_stop"] = actual_rounds < self.MAX_ROUNDS
-
-        logger.info(f"🔄 [{expert_name}] 多轮完成: R1={r1_culprit}→R{actual_rounds}={current_culprit} "
-                     f"({current_confidence:.2f}), {actual_rounds}轮")
-
-        return current_result
+        return r3_parsed

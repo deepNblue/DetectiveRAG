@@ -582,9 +582,9 @@ class EvidenceGraphBuilder:
     
     def _generate_graph_text(self) -> str:
         """生成图谱的文本描述 — 注入到case_text供ASMR使用"""
-        lines = ["\n\n【🕸️ 图片证据知识图谱 (参考RAG-Anything)】"]
-        
-        # 主实体
+        lines = ["\n\n【🕸️ 证据知识图谱】"]
+
+        # 主实体（图片证据）
         image_nodes = [n for n in self.nodes.values() if n.node_type == "image_evidence"]
         if image_nodes:
             lines.append(f"\n📷 图片证据节点 ({len(image_nodes)}张):")
@@ -592,14 +592,14 @@ class EvidenceGraphBuilder:
                 lines.append(f"  • [{node.chunk_id}] {node.name}")
                 if node.summary:
                     lines.append(f"    摘要: {node.summary[:100]}")
-        
-        # 子实体(按类型分组)
+
+        # 子实体(按类型分组，包含文本+图片实体)
         sub_nodes = [n for n in self.nodes.values() if n.node_type != "image_evidence"]
         if sub_nodes:
             by_type = {}
             for n in sub_nodes:
                 by_type.setdefault(n.node_type, []).append(n)
-            
+
             type_labels = {
                 "suspect": "👤 嫌疑人", "victim": "💀 受害者", "weapon": "🔪 凶器",
                 "substance": "⚗️ 物质", "location": "📍 地点", "time": "🕐 时间",
@@ -607,35 +607,56 @@ class EvidenceGraphBuilder:
                 "physical_evidence": "🔎 物证", "biometric": "🧬 生物特征",
                 "measurement": "📏 测量数据", "communication": "📞 通讯记录",
                 "financial": "💰 财务记录", "surveillance": "📹 监控",
-                "other": "📌 其他",
+                "motive": "🎯 动机", "other": "📌 其他",
             }
-            
+
             lines.append(f"\n🔍 提取的刑侦实体 ({len(sub_nodes)}个):")
             for ntype, nodes in by_type.items():
                 label = type_labels.get(ntype, ntype)
                 names = [f"{n.name}(置信{n.confidence:.0%})" for n in nodes]
                 lines.append(f"  {label}: {', '.join(names)}")
-        
-        # belongs_to 关系
-        belongs_edges = [e for e in self.edges if e.relation_type == "belongs_to"]
-        if belongs_edges:
-            lines.append(f"\n🔗 归属关系 (belongs_to, weight=10.0) ({len(belongs_edges)}条):")
-            for edge in belongs_edges[:10]:
-                src = self.nodes.get(edge.source_id)
-                tgt = self.nodes.get(edge.target_id)
-                if src and tgt:
-                    lines.append(f"  {src.name} --[belongs_to]--> {tgt.name.split(':')[0]}")
-        
-        # same_as 关系
-        same_edges = [e for e in self.edges if e.relation_type == "same_as"]
-        if same_edges:
-            lines.append(f"\n🔄 跨图同一实体 (same_as) ({len(same_edges)}条):")
-            for edge in same_edges:
-                src = self.nodes.get(edge.source_id)
-                tgt = self.nodes.get(edge.target_id)
-                if src and tgt:
-                    lines.append(f"  {src.name} ≡ {tgt.name}")
-        
+
+        # 按关系类型分组输出
+        if self.edges:
+            by_rel = {}
+            for e in self.edges:
+                by_rel.setdefault(e.relation_type, []).append(e)
+
+            rel_labels = {
+                "belongs_to": "📎 归属关系",
+                "same_as": "🔄 同一实体",
+                "has_motive": "🎯 动机关联",
+                "has_opportunity": "🕐 作案机会",
+                "has_means": "🔧 作案手段",
+                "contradicts": "⚡ 矛盾冲突",
+                "proves": "✅ 证据证明",
+                "implies": "🔍 暗示推断",
+                "alibis": "🛡️ 不在场证明",
+                "happened_at": "📍 发生于",
+                "located_at": "📍 位于/出现于",
+                "contacted_with": "📞 接触/通讯",
+                "owns": "💰 拥有",
+                "knows": "🔑 知道/掌握",
+                "disputes_with": "⚔️ 纠纷",
+                "threatens": "⚠️ 威胁",
+                "hides": "🔒 隐藏/掩盖",
+                "tampered": "🔧 篡改/破坏",
+                "witnessed": "👁️ 目击",
+                "suspicious_of": "❓ 可疑行为",
+            }
+
+            lines.append(f"\n🔗 实体关系 ({len(self.edges)}条):")
+            for rel_type, edges in by_rel.items():
+                label = rel_labels.get(rel_type, rel_type)
+                lines.append(f"  {label} ({len(edges)}条):")
+                for edge in edges[:8]:
+                    src = self.nodes.get(edge.source_id)
+                    tgt = self.nodes.get(edge.target_id)
+                    if src and tgt:
+                        lines.append(f"    {src.name} → {tgt.name} [{edge.description[:60]}]")
+                if len(edges) > 8:
+                    lines.append(f"    ... 还有 {len(edges)-8} 条")
+
         lines.append(f"\n")
         return "\n".join(lines)
     
@@ -747,6 +768,322 @@ class EvidenceGraphBuilder:
         
         return contradictions
     
+    # ══════════════════════════════════════════════════════════════
+    # 文本图谱构建 — 从案件文本提取实体+语义关系
+    # ══════════════════════════════════════════════════════════════
+
+    def build_from_text(
+        self,
+        case_text: str,
+        suspects: List[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        从案件文本构建知识图谱（不依赖图片）
+
+        流程:
+        1. LLM 从案件文本提取实体 (人/物/地点/时间/证据)
+        2. LLM 从案件文本提取实体间语义关系 (动机/矛盾/证明/时间线...)
+        3. 创建嫌疑人与实体间的关联
+        4. 合并同名实体
+        5. 生成图谱文本
+
+        Returns: 同 build_from_image_analyses 的格式
+        """
+        suspects = suspects or []
+        suspect_names = [s.get("name", "") if isinstance(s, dict) else str(s) for s in suspects]
+
+        # Step 1: 从文本提取实体
+        text_entities = self._extract_text_entities(case_text)
+        logger.info(f"📝 文本实体提取: {len(text_entities)} 个实体")
+
+        # 创建文本实体节点
+        for entity in text_entities:
+            entity_id = self._compute_id(f"text_{entity['name']}_{entity['type']}", "ent")
+            if entity_id not in self.nodes:
+                self.nodes[entity_id] = EvidenceNode(
+                    node_id=entity_id,
+                    name=entity["name"],
+                    node_type=entity["type"],
+                    description=entity.get("description", ""),
+                    source_image="",
+                    confidence=entity.get("confidence", 0.8),
+                    summary=entity.get("description", "")[:100],
+                    chunk_id=self._compute_id(case_text[:500], "chunk"),
+                    metadata={"source": "text"},
+                )
+
+        # Step 2: 从文本提取语义关系
+        text_relations = self._extract_text_relations(case_text, text_entities)
+        logger.info(f"📝 文本关系提取: {len(text_relations)} 条关系")
+
+        for rel in text_relations:
+            src_id = self._find_entity_id(rel.get("source", ""))
+            tgt_id = self._find_entity_id(rel.get("target", ""))
+            if src_id and tgt_id and src_id != tgt_id:
+                edge_id = self._compute_id(f"txtrel_{src_id}_{tgt_id}_{rel['relation']}", "rel")
+                # 避免重复边
+                existing = {(e.source_id, e.target_id, e.relation_type) for e in self.edges}
+                if (src_id, tgt_id, rel["relation"]) not in existing:
+                    self.edges.append(EvidenceEdge(
+                        edge_id=edge_id,
+                        source_id=src_id,
+                        target_id=tgt_id,
+                        relation_type=rel["relation"],
+                        description=rel.get("description", ""),
+                        keywords=rel.get("relation", ""),
+                        weight=rel.get("weight", 5.0),
+                        source_id_chunk=self._compute_id(case_text[:500], "chunk"),
+                    ))
+
+        # Step 3: 嫌疑人 → 实体关联
+        self._link_suspects_to_entities(suspect_names)
+
+        # Step 4: 合并同名实体
+        self._merge_duplicate_entities()
+
+        # Step 5: 生成图谱文本
+        graph_text = self._generate_graph_text()
+
+        # Step 6: 检索 chunks
+        retrieval_chunks = self._generate_retrieval_chunks()
+
+        return {
+            "nodes": [{"id": n.node_id, "name": n.name, "type": n.node_type,
+                        "desc": n.description[:100], "summary": n.summary,
+                        "chunk_id": n.chunk_id} for n in self.nodes.values()],
+            "edges": [{"id": e.edge_id, "src": e.source_id, "tgt": e.target_id,
+                        "rel": e.relation_type, "desc": e.description,
+                        "keywords": e.keywords, "weight": e.weight} for e in self.edges],
+            "graph_text": graph_text,
+            "cross_modal_links": [],
+            "retrieval_chunks": retrieval_chunks,
+            "stats": {
+                "total_nodes": len(self.nodes),
+                "total_edges": len(self.edges),
+                "text_entities": len(text_entities),
+                "text_relations": len(text_relations),
+                "retrieval_chunks": len(retrieval_chunks),
+            }
+        }
+
+    def _extract_text_entities(self, case_text: str) -> List[Dict[str, Any]]:
+        """LLM 从案件文本提取刑侦实体"""
+        if not self.llm_client:
+            return self._regex_extract_entities(case_text, "案件文本", 0)
+
+        prompt = f"""你是一名刑侦证据分析师。请从以下案件文本中提取所有具有刑侦价值的实体。
+
+案件文本:
+{case_text}
+
+请提取所有关键实体，严格按以下JSON格式返回:
+{{
+  "entities": [
+    {{
+      "name": "实体名称(必须具体，如'氰化钾'而非'毒物')",
+      "type": "实体类型(从以下选择: suspect/victim/weapon/substance/location/time/document/digital_device/physical_evidence/vehicle/communication/financial/biometric/measurement/surveillance/motive/other)",
+      "description": "该实体在案件中的具体角色和意义(一句话)",
+      "confidence": 0.9
+    }}
+  ]
+}}
+
+提取规则:
+1. 提取所有具体人名 → type=suspect (如果明显是死者用 victim)
+2. 提取所有化学物质、药物、毒物 → type=substance
+3. 提取所有具体时间点 → type=time
+4. 提取所有地点 → type=location
+5. 提取所有数字/测量数据 → type=measurement
+6. 提取所有武器/工具 → type=weapon
+7. 提取所有通讯记录(短信/通话) → type=communication
+8. 提取所有监控/摄像头相关 → type=surveillance
+9. 提取所有生物特征(DNA/指纹) → type=biometric
+10. 提取所有文件/遗嘱/合同 → type=document
+11. 提取所有财务/金钱相关 → type=financial
+12. 提取明显的动机描述 → type=motive
+13. 不要提取抽象概念，只提取具体可操作的实体"""
+
+        try:
+            response = self.llm_client.chat_completion(
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+            )
+            if isinstance(response, str):
+                return self._robust_json_parse(response)
+            return []
+        except Exception as e:
+            logger.warning(f"文本实体提取失败: {e}, 使用正则回退")
+            return self._regex_extract_entities(case_text, "案件文本", 0)
+
+    def _extract_text_relations(
+        self, case_text: str, entities: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """LLM 从案件文本提取实体间的语义关系"""
+        if not self.llm_client or not entities:
+            return []
+
+        # 拼接实体名供 LLM 参考
+        entity_names = [e["name"] for e in entities]
+        entity_list_str = "\n".join(f"  - {name} ({e['type']})" for name, e in zip(entity_names, entities))
+
+        prompt = f"""你是一名刑侦图谱分析师。请从以下案件文本中提取实体之间的关系。
+
+案件文本:
+{case_text}
+
+已识别的实体:
+{entity_list_str}
+
+请提取所有实体间的刑侦关系，严格按以下JSON格式返回:
+{{
+  "relations": [
+    {{
+      "source": "源实体名称(必须是上面列出的实体)",
+      "target": "目标实体名称(必须是上面列出的实体)",
+      "relation": "关系类型(从以下选择: has_motive/has_opportunity/has_means/contradicts/proves/implies/alibis/happened_at/located_at/contacted_with/owns/knows/disputes_with/threatens/hides/tampered/witnessed/suspicious_of)",
+      "description": "关系描述(一句话说明这条关系在案件中的意义)",
+      "weight": 7.0
+    }}
+  ]
+}}
+
+关系类型说明:
+- has_motive: A有杀害B的动机
+- has_opportunity: A有机会作案(时间/地点上)
+- has_means: A有作案手段(技能/工具/接触途径)
+- contradicts: A与B的陈述矛盾
+- proves: A证明B的某个行为或状态
+- implies: A暗示B的某个可能
+- alibis: A为B提供不在场证明
+- happened_at: 事件A发生在地点/时间B
+- located_at: A位于B处
+- contacted_with: A与B有接触/通讯
+- owns: A拥有B
+- knows: A知道B(如密码/秘密)
+- disputes_with: A与B有纠纷
+- threatens: A威胁B
+- hides: A隐藏/掩盖B
+- tampered: A篡改/破坏了B
+- witnessed: A目击了B
+- suspicious_of: A对B有可疑行为
+
+权重规则:
+- 直接证据(motivation/opportunity/means): 8-10
+- 间接证据(implies/knows): 5-7
+- 弱关联(suspicious_of): 3-5"""
+
+        try:
+            response = self.llm_client.chat_completion(
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+            )
+            if isinstance(response, str):
+                return self._robust_json_parse_relations(response)
+            return []
+        except Exception as e:
+            logger.warning(f"文本关系提取失败: {e}")
+            return []
+
+    def _robust_json_parse_relations(self, response: str) -> List[Dict[str, Any]]:
+        """健壮的JSON关系解析"""
+        cleaned = re.sub(r'```(?:json)?\s*', '', response)
+        cleaned = re.sub(r'```', '', cleaned)
+
+        # Strategy 1: 直接解析
+        try:
+            data = json.loads(cleaned)
+            if isinstance(data, dict) and "relations" in data:
+                return [r for r in data["relations"] if isinstance(r, dict)
+                        and "source" in r and "target" in r and "relation" in r]
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        # Strategy 2: 提取 JSON 块
+        json_blocks = re.findall(r'\{[\s\S]*\}', response)
+        for block in json_blocks:
+            try:
+                data = json.loads(block)
+                if isinstance(data, dict) and "relations" in data:
+                    return [r for r in data["relations"] if isinstance(r, dict)
+                            and "source" in r and "target" in r and "relation" in r]
+            except (json.JSONDecodeError, ValueError):
+                continue
+
+        return []
+
+    def _find_entity_id(self, entity_name: str) -> Optional[str]:
+        """根据实体名查找节点ID（精确+模糊匹配）"""
+        if not entity_name:
+            return None
+
+        # 精确匹配
+        for nid, node in self.nodes.items():
+            if node.name == entity_name:
+                return nid
+
+        # 包含匹配
+        for nid, node in self.nodes.items():
+            if entity_name in node.name or node.name in entity_name:
+                return nid
+
+        # 核心名匹配（去括号/头衔后）
+        core = re.sub(r'[（(].*?[）)]', '', entity_name).strip()
+        if core:
+            for nid, node in self.nodes.items():
+                node_core = re.sub(r'[（(].*?[）)]', '', node.name).strip()
+                if core == node_core:
+                    return nid
+
+        return None
+
+    def _link_suspects_to_entities(self, suspect_names: List[str]):
+        """为嫌疑人创建与图谱实体的关联边"""
+        for suspect in suspect_names:
+            # 核心名
+            core = re.sub(r'[（(].*?[）)]', '', suspect).strip()
+            if not core:
+                continue
+
+            # 找图谱中匹配的嫌疑人节点
+            suspect_id = self._find_entity_id(suspect)
+            if not suspect_id:
+                continue
+
+            # 为嫌疑人关联动机/物证/地点等
+            for nid, node in self.nodes.items():
+                if nid == suspect_id:
+                    continue
+
+                # 嫌疑人 → 地点: located_at
+                if node.node_type == "location":
+                    edge_id = self._compute_id(f"loc_{suspect_id}_{nid}", "rel")
+                    existing = {(e.source_id, e.target_id, e.relation_type) for e in self.edges}
+                    if (suspect_id, nid, "located_at") not in existing:
+                        self.edges.append(EvidenceEdge(
+                            edge_id=edge_id,
+                            source_id=suspect_id,
+                            target_id=nid,
+                            relation_type="located_at",
+                            description=f"{suspect}与地点{node.name}有关联",
+                            keywords="located_at,presence",
+                            weight=4.0,
+                        ))
+
+                # 嫌疑人 → 动机: has_motive
+                if node.node_type == "motive":
+                    edge_id = self._compute_id(f"mot_{suspect_id}_{nid}", "rel")
+                    existing = {(e.source_id, e.target_id, e.relation_type) for e in self.edges}
+                    if (suspect_id, nid, "has_motive") not in existing:
+                        self.edges.append(EvidenceEdge(
+                            edge_id=edge_id,
+                            source_id=suspect_id,
+                            target_id=nid,
+                            relation_type="has_motive",
+                            description=f"{suspect}有{node.name}的动机",
+                            keywords="has_motive,motive",
+                            weight=8.0,
+                        ))
+
     def reset(self):
         """重置图谱"""
         self.nodes.clear()

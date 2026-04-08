@@ -149,29 +149,63 @@ class DetectiveWebUI:
             return unique, edges
 
         def _extract_suspect_edges(suspects):
-            """从嫌疑人分析中提取关系边"""
+            """从嫌疑人分析中提取关系边 — 优先提取嫌疑人之间的语义关系"""
             edges = []
+            suspect_list = []
             if isinstance(suspects, list):
-                for s in suspects:
-                    if isinstance(s, dict):
-                        name = s.get("name", s.get("data", {}).get("name", ""))
-                        if not name:
-                            continue
-                        data = s.get("data", s)
-                        motive = data.get("motive", {})
-                        if isinstance(motive, dict):
-                            mtype = motive.get("type", "")
-                            if mtype:
-                                edges.append({"source": name, "target": "案件", "label": mtype, "weight": 0.6})
+                suspect_list = suspects
             elif isinstance(suspects, dict):
                 data = suspects.get("data", suspects)
-                name = data.get("name", "")
-                if name:
-                    motive = data.get("motive", {})
-                    if isinstance(motive, dict):
-                        mtype = motive.get("type", "")
-                        if mtype:
-                            edges.append({"source": name, "target": "案件", "label": mtype, "weight": 0.6})
+                # 可能是单个嫌疑人 dict 或包含 suspects 列表
+                if "suspects" in data:
+                    suspect_list = data["suspects"]
+                else:
+                    suspect_list = [data]
+
+            for s in suspect_list:
+                if not isinstance(s, dict):
+                    continue
+                name = s.get("name", s.get("data", {}).get("name", ""))
+                if not name:
+                    continue
+                data = s.get("data", s)
+
+                # 动机 → has_motive
+                motive = data.get("motive", {})
+                if isinstance(motive, dict):
+                    mtype = motive.get("type", "")
+                    mdesc = motive.get("description", "")
+                    target = motive.get("target", motive.get("victim", ""))
+                    if mtype:
+                        edge_label = mtype if len(mtype) <= 14 else mtype[:14]
+                        edges.append({"source": name, "target": target or "案件", "label": edge_label, "weight": 0.7})
+
+                # 机会 → has_opportunity
+                opportunity = data.get("opportunity", data.get("access", {}))
+                if isinstance(opportunity, dict):
+                    odesc = opportunity.get("description", opportunity.get("type", ""))
+                    if odesc:
+                        edges.append({"source": name, "target": "案件", "label": "有机会", "weight": 0.6})
+
+                # 嫌疑人间关系 (如 共谋/认识/敌对)
+                relationships = data.get("relationships", data.get("connections", []))
+                if isinstance(relationships, list):
+                    for rel in relationships[:4]:
+                        if isinstance(rel, dict):
+                            other = rel.get("with", rel.get("target", rel.get("person", "")))
+                            rtype = rel.get("type", rel.get("relationship", ""))
+                            if other and rtype:
+                                edges.append({"source": name, "target": other, "label": rtype[:14], "weight": 0.6})
+
+                # 关联证据
+                linked_evidence = data.get("linked_evidence", data.get("evidence", []))
+                if isinstance(linked_evidence, list):
+                    for ev in linked_evidence[:3]:
+                        if isinstance(ev, dict):
+                            evname = ev.get("name", ev.get("description", ""))
+                            evtype = ev.get("type", "关联")
+                            if evname:
+                                edges.append({"source": name, "target": evname[:14], "label": evtype[:10] if evtype else "关联", "weight": 0.6})
             return edges
 
         def _extract_evidence_edges(evidence, suspects):
@@ -243,16 +277,12 @@ class DetectiveWebUI:
                 with log_lock:
                     log.set_suspect_names(sn)  # 缓存嫌疑人用于图谱高亮
                     log.finish("Stage 2/6 — 嫌疑人分析", "done", f"✅ {len(sn)} 名嫌疑人: {', '.join(sn[:6])}")
+                    # 嫌疑人节点标为 suspect 类型(更醒目)
                     for nm in sn[:10]:
-                        log.nodes([{"id": nm, "label": nm, "type": "person"}])
-                    # 添加嫌疑人→案件的关系边
+                        log.nodes([{"id": nm, "label": nm, "type": "suspect"}])
+                    # 从嫌疑人数据中提取动机边 (跳过"案件中心"辐射连接)
                     if suspect_edges:
                         log.edges(suspect_edges)
-                    # 如果没有"案件"中心节点，创建一个
-                    if sn:
-                        log.nodes([{"id": "案件", "label": "⚖️ 案件中心", "type": "event"}])
-                        for nm in sn[:6]:
-                            log.edges([{"source": nm, "target": "案件", "label": "嫌疑人", "weight": 0.8}])
                     bp.update_agent("puppeteer", 50, "ANALYZING")
                     bp.add_fragment("puppeteer", f"识别嫌疑人: {', '.join(sn[:4])}")
                     bp.add_timeline_event(f"👤 嫌疑人: {', '.join(sn[:4])}", "info")
@@ -393,6 +423,22 @@ class DetectiveWebUI:
                     bp.update_agent("mirror", 80, "DONE")
                     log.finish("🟢 ASMR线路 — 启动", "done")
                     bp_state["needs_render"] = True
+
+                    # 🆕 v15.2: 注入 ASMR 证据图谱到 WebUI 可视化
+                    eg = asmr_raw.get("evidence_graph", {})
+                    eg_nodes = eg.get("nodes", [])
+                    eg_edges = eg.get("edges", [])
+                    if eg_nodes:
+                        for n in eg_nodes[:30]:
+                            log.nodes([{"id": n.get("id", ""), "label": n.get("name", n.get("id", "")), "type": n.get("type", "default")}])
+                        for e in eg_edges[:30]:
+                            log.edges([{
+                                "source": e.get("src", e.get("source", "")),
+                                "target": e.get("tgt", e.get("target", "")),
+                                "label": e.get("rel", e.get("label", "")),
+                                "weight": float(e.get("weight", 0.5)),
+                            }])
+                        bp.add_timeline_event(f"🕸️ 图谱注入: {len(eg_nodes)}节点 {len(eg_edges)}关系", "info")
 
                 asmr_result.update({
                     "done": True, "culprit": culprit, "confidence": confidence, "time": elapsed,
@@ -928,11 +974,12 @@ class DetectiveWebUI:
             try:
                 resp = self.llm_client.chat_completion(
                     messages=[{"role": "user", "content": system_prompt}],
-                    max_tokens=500,
+                    max_tokens=8192,
                     temperature=0.4,
                     timeout=120,
                 )
-                reply = resp.get("choices", [{}])[0].get("message", {}).get("content", "")
+                # chat_completion returns str, not dict
+                reply = resp if isinstance(resp, str) else resp.get("choices", [{}])[0].get("message", {}).get("content", "")
                 if not reply:
                     reply = "（专家暂时无法回答，请稍后重试）"
             except Exception as e:

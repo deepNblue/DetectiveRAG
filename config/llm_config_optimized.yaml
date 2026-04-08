@@ -107,4 +107,4 @@ performance:
   cache_enabled: true
   cache_ttl: 3600
   parallel_requests: true
-  max_workers: 4
+  max_workers: 2

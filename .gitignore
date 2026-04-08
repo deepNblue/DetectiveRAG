@@ -43,3 +43,10 @@ Thumbs.db
 *_v8_*.py
 *_v111_*.py
 *_v92_*.py
+.v15_backup/
+
+# Conversations
+data/conversations/
+
+# Temporary test scripts
+tests/run_single_case.py

@@ -159,7 +159,7 @@ logging:
 
 # 性能配置
 performance:
-  max_workers: 4
+  max_workers: 2
   cache_enabled: true
   cache_ttl: 3600
   rate_limit:

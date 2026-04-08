@@ -56,15 +56,33 @@ class LLMClient:
         self._init_client()
     
     def _load_config(self, config_path: str) -> Dict:
-        """加载配置"""
+        """加载配置（自动替换 ${ENV_VAR} 格式的环境变量）"""
         if os.path.exists(config_path):
             with open(config_path, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f)
+                config = self._resolve_env_vars(config)
                 self.logger.info(f"API配置加载成功")
                 return config
         else:
             self.logger.warning(f"配置文件不存在: {config_path}，使用默认配置")
             return self._get_default_config()
+    
+    def _resolve_env_vars(self, obj):
+        """递归替换配置中的 ${ENV_VAR} 和 ${ENV_VAR:default} 格式为环境变量值"""
+        import re, os
+        if isinstance(obj, dict):
+            return {k: self._resolve_env_vars(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._resolve_env_vars(v) for v in obj]
+        elif isinstance(obj, str):
+            def _replacer(match):
+                var_expr = match.group(1)
+                if ':' in var_expr:
+                    var_name, default = var_expr.split(':', 1)
+                    return os.environ.get(var_name, default)
+                return os.environ.get(var_expr, match.group(0))
+            return re.sub(r'\$\{([^}]+)\}', _replacer, obj)
+        return obj
     
     def _get_default_config(self) -> Dict:
         """获取默认配置"""
@@ -85,6 +103,7 @@ class LLMClient:
         self.api_key = provider_config.get("api_key", "EMPTY")
         self.base_url = provider_config.get("base_url", "")
         self.model = provider_config.get("model", "qwen3-30b-a3b")
+        self.default_max_tokens = provider_config.get("max_tokens", 8192)
         
         self.logger.info(f"使用API提供商: {provider}")
         self.logger.info(f"Base URL: {self.base_url}")
@@ -95,7 +114,7 @@ class LLMClient:
         messages: List[Dict[str, str]],
         model: str = None,
         temperature: float = 0.7,
-        max_tokens: int = 2000,
+        max_tokens: int = 8192,
         use_cache: bool = True,
         timeout: int = None
     ) -> str:
@@ -113,6 +132,7 @@ class LLMClient:
             API响应文本
         """
         model = model or self.model
+        _max_tokens = max_tokens
         self.stats["total_calls"] += 1
         
         # 检查缓存
@@ -128,7 +148,7 @@ class LLMClient:
         for attempt in range(self.max_retries):
             try:
                 result = self._call_api(
-                    messages, model, temperature, max_tokens, timeout
+                    messages, model, temperature, _max_tokens, timeout
                 )
                 
                 # 缓存结果
@@ -196,7 +216,27 @@ class LLMClient:
             if "usage" in result:
                 self.stats["total_tokens"] += result["usage"].get("total_tokens", 0)
             
-            return result["choices"][0]["message"]["content"]
+            message = result["choices"][0]["message"]
+            content = message.get("content", "") or ""
+            reasoning = message.get("reasoning_content", "") or ""
+            finish_reason = result["choices"][0].get("finish_reason", "")
+            
+            # GLM-5.1 thinking模型: content可能为空（thinking消耗了所有token）
+            if not content.strip():
+                if reasoning.strip() and finish_reason == "length":
+                    # thinking截断了正式回复，重试并加大max_tokens
+                    self.logger.warning(f"⚠️ thinking模型content为空(max_tokens={max_tokens}), 重试加大token限制")
+                    new_max = max(max_tokens * 2, 8192)
+                    return self._call_api(messages, model, temperature, new_max, timeout)
+                elif reasoning.strip():
+                    # thinking完成但content仍空，从reasoning中提取最后的有用内容
+                    self.logger.warning(f"⚠️ thinking模型content为空，使用reasoning_content作为fallback")
+                    return reasoning
+                else:
+                    self.logger.warning("⚠️ API返回空content和空reasoning")
+                    return ""
+            
+            return content
         else:
             raise Exception(f"API返回错误: {response.status_code} - {response.text}")
     
@@ -262,7 +302,7 @@ class LLMClient:
         prompt: str,
         image_paths: List[str],
         temperature: float = 0.7,
-        max_tokens: int = 2000,
+        max_tokens: int = 4096,
         timeout: int = 180,
     ) -> str:
         """
