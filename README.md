@@ -154,12 +154,19 @@ NVIDIA B10 单卡
 - ✅ **内存池**：PagedAttention，显存利用率提升85%
 - ✅ **异步推理**：18专家并发，wall-clock时间从120s → 45s（B10加速）
 
-### 开源模型贡献
+### 开源模型与项目贡献
 
-本项目使用以下开源模型：
+本项目基于以下开源模型和项目构建：
+
+#### 🔧 开源模型
 
 1. **Google Gemma 4 26B** - 主推理模型 + 视觉分析（NVIDIA NIM本地部署）
 2. **阿里 Qwen3-Embedding-0.6B** - 文本向量化（NVIDIA NIM本地部署）
+
+#### 🏗️ 开源项目
+
+3. **[RAG-Anything](https://github.com/RAG-Anything/RAG-Anything)** — 香港大学多模态RAG框架。本项目的证据图谱构建（跨模态实体提取、多类型节点关联、视觉分析增强）深度借鉴了其架构设计思想。
+4. **[nanobot](https://github.com/icemint0828/nanobot)** — 个人AI助手框架。本项目基于 nanobot 的技能系统、记忆管理和飞书集成能力开发，快速验证了从原型到产品的全流程。
 
 我们感谢这些开源项目的贡献者，并承诺在MIT License下开源本项目代码。
 
