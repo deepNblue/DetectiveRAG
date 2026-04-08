@@ -100,19 +100,19 @@ similarities = torch.cosine_similarity(query_emb, embeddings)
 
 #### 4. NVIDIA DGX Spark 高性能计算平台
 
-本项目在NVIDIA DGX Spark平台上进行大规模推理加速：
+本项目在NVIDIA DGX Spark平台（单卡B10）上进行推理加速：
 
 | 组件 | 配置 | 用途 |
 |------|------|------|
-| **GPU集群** | 多卡并行 | 同时部署Gemma 4 26B + Qwen3-Embedding |
-| **分布式推理** | vLLM + Ray | 多专家并发推理，吞吐量提升3-5倍 |
+| **GPU** | NVIDIA B10 | 单卡部署Gemma 4 26B + Qwen3-Embedding |
+| **推理引擎** | vLLM | 优化推理吞吐，支持Continuous Batching |
 | **内存优化** | PagedAttention | 26B模型显存占用从52GB → 28GB |
 | **批处理加速** | Continuous Batching | 多案件并行分析，延迟降低60% |
 
-**DGX Spark并发性能**：
+**DGX Spark（B10单卡）性能**：
 
-| 场景 | 单GPU | DGX Spark（多GPU） | 提升倍数 |
-|------|-------|-------------------|---------|
+| 场景 | 普通GPU | DGX Spark（B10） | 提升倍数 |
+|------|---------|-----------------|---------|
 | **单案推理** | 120s | 45s | 2.7x |
 | **批量推理（10案）** | 1200s | 280s | 4.3x |
 | **多模态分析** | 180s | 65s | 2.8x |
@@ -120,11 +120,10 @@ similarities = torch.cosine_similarity(query_emb, embeddings)
 
 **部署架构**：
 ```
-DGX Spark 集群
-├── GPU 0: Gemma 4 26B (主推理 + 视觉)
-├── GPU 1: Gemma 4 26B (并发推理)
-├── GPU 2: Qwen3-Embedding (向量化)
-└── GPU 3: 备用/负载均衡
+NVIDIA B10 单卡
+├── Gemma 4 26B (主推理 + 视觉) - 28GB显存
+└── Qwen3-Embedding-0.6B (向量化) - 2GB显存
+    总计：30GB显存占用（B10容量充足）
 ```
 
 ### 并发部署性能指标
@@ -133,8 +132,8 @@ DGX Spark 集群
 
 | 指标 | 数值 | 说明 |
 |------|------|------|
-| **模型加载时间** | 15s | 两个模型同时加载到GPU |
-| **显存占用** | 32GB | Gemma 4(26B) + Qwen3(0.6B) |
+| **模型加载时间** | 15s | 两个模型同时加载到B10 GPU |
+| **显存占用** | 30GB | Gemma 4(28GB) + Qwen3(2GB) |
 | **并发推理吞吐** | 8 req/s | 多专家并发分析 |
 | **单次推理延迟** | 0.6-7s | 简单问答 → 复杂推理 |
 | **向量检索延迟** | <100ms | 1000文档相似度搜索 |
@@ -147,13 +146,13 @@ DGX Spark 集群
 |------|---------|---------|---------|
 | **单模型串行** | 1.2-12s | 8min | 28GB |
 | **NIM并发部署** | 0.6-7s | <2min | 32GB |
-| **DGX Spark集群** | 0.3-3.5s | 45s | 32GB×4 |
+| **NVIDIA B10单卡** | 0.3-3.5s | 45s | 30GB |
 
 **关键优化**：
 - ✅ **模型量化**：Q8_0量化，精度损失<2%，速度提升40%
 - ✅ **批处理**：Continuous Batching，吞吐量提升3倍
 - ✅ **内存池**：PagedAttention，显存利用率提升85%
-- ✅ **异步推理**：18专家并发，wall-clock时间从180s → 45s
+- ✅ **异步推理**：18专家并发，wall-clock时间从120s → 45s（B10加速）
 
 ### 开源模型贡献
 
