@@ -400,7 +400,8 @@ def render_force_graph(
     }});
 
     /* ---- 初始化节点位置: 分层同心环 ---- */
-    var tierRadii = {{ 1: Math.min(W, H) * 0.12, 2: Math.min(W, H) * 0.28, 3: Math.min(W, H) * 0.42 }};
+    var minDim = Math.min(W, H);
+    var tierRadii = {{ 1: minDim * 0.08, 2: minDim * 0.25, 3: minDim * 0.40 }};
     var tierCounts = {{ 1: 0, 2: 0, 3: 0 }};
     nodes.forEach(function(n) {{ tierCounts[n.tier || 3]++; }});
 
@@ -415,47 +416,61 @@ def render_force_graph(
         n.y = CY + r * Math.sin(angle);
     }});
 
-    /* ---- Force simulation v2: 分层引力 + 核心锚定 ---- */
+    /* ---- 计算每个节点的核心度(重要性) ---- */
+    var maxDegree = 0;
+    nodes.forEach(function(n) {{ if (n.degree > maxDegree) maxDegree = n.degree; }});
+    maxDegree = Math.max(maxDegree, 1);
+
+    /* ---- Force simulation v3: 核心锚定 + 辐射布局 ---- */
     var simulation = d3.forceSimulation(nodes)
-        /* 连接力: 高权重=短距离(紧密) */
+        /* 连接力: 高权重=短距离(紧密), 核心-核心连线更短 */
         .force("link", d3.forceLink(links)
             .id(function(d) {{ return d.id; }})
             .distance(function(d) {{
-                if (d.isWeak) return 140;
-                return Math.max(50, 130 - d.weight * 40);
+                if (d.isWeak) return 120;
+                var bothCore = (d.source.tier === 1 && d.target.tier === 1);
+                if (bothCore) return 60;
+                var coreToEvidence = (d.source.tier === 1 || d.target.tier === 1);
+                if (coreToEvidence) return 80;
+                return Math.max(60, 130 - d.weight * 30);
             }})
             .strength(function(d) {{
-                return d.isWeak ? 0.15 : 0.4 + d.weight * 0.2;
+                if (d.isWeak) return 0.1;
+                var bothCore = (d.source.tier === 1 && d.target.tier === 1);
+                if (bothCore) return 0.8;
+                return 0.3 + d.weight * 0.3;
             }})
         )
-        /* 排斥力: 按节点大小缩放 */
+        /* 排斥力: 核心节点排斥力适中(不强推), 外圈更弱 */
         .force("charge", d3.forceManyBody()
             .strength(function(d) {{
-                if (d.isSuspect) return -600;
-                return -300 - d.degree * 20;
+                if (d.tier === 1) return -200;
+                if (d.tier === 2) return -180;
+                return -120;
             }})
         )
-        /* 中心引力: 按 tier 分层 */
-        .force("center", d3.forceCenter(CX, CY).strength(0.08))
-        /* Tier 引力: 核心(tier1)被强力拉向中心, 外圈(tier3)可远离 */
-        .force("tierX", d3.forceX(function(d) {{
-            return CX + (d.tier - 2) * W * 0.01;
-        }}).strength(function(d) {{
-            return d.tier === 1 ? 0.25 : (d.tier === 2 ? 0.08 : 0.02);
+        /* 中心引力: 全局弱引力防止散逸 */
+        .force("center", d3.forceCenter(CX, CY).strength(0.05))
+        /* Tier 引力: 核心(tier1)被强力锚定在中心, 中圈适度, 外圈松散 */
+        .force("tierX", d3.forceX(CX).strength(function(d) {{
+            if (d.tier === 1) return 0.45;
+            if (d.tier === 2) return 0.15;
+            return 0.03;
         }}))
-        .force("tierY", d3.forceY(function(d) {{
-            return CY + (d.tier - 2) * H * 0.01;
-        }}).strength(function(d) {{
-            return d.tier === 1 ? 0.25 : (d.tier === 2 ? 0.08 : 0.02);
+        .force("tierY", d3.forceY(CY).strength(function(d) {{
+            if (d.tier === 1) return 0.45;
+            if (d.tier === 2) return 0.15;
+            return 0.03;
         }}))
-        /* 碰撞 */
+        /* 碰撞: 核心节点大碰撞域防止重叠 */
         .force("collision", d3.forceCollide().radius(function(d) {{
-            if (d.isSuspect) return 42;
-            if (d.degree >= 5) return 32;
-            return 24;
+            if (d.isSuspect) return 38;
+            if (d.tier === 1) return 32;
+            if (d.degree >= 5) return 28;
+            return 20;
         }}))
-        .alphaDecay(0.015)
-        .velocityDecay(0.35);
+        .alphaDecay(0.02)
+        .velocityDecay(0.4);
 
     /* ---- Draw links (弱关系底层, 强关系上层) ---- */
     var weakLinks = links.filter(function(d) {{ return d.isWeak; }});
@@ -588,8 +603,25 @@ def render_force_graph(
             return info;
         }});
 
-    /* ---- Tick ---- */
+    /* ---- Tick: 位置约束 + 渲染 ---- */
     simulation.on("tick", function() {{
+        /* 核心节点最大离中心距离约束 */
+        var maxR1 = minDim * 0.15;
+        var maxR2 = minDim * 0.35;
+        nodes.forEach(function(d) {{
+            var dx = d.x - CX, dy = d.y - CY;
+            var dist = Math.sqrt(dx * dx + dy * dy);
+            var maxR = d.tier === 1 ? maxR1 : (d.tier === 2 ? maxR2 : minDim * 0.48);
+            if (dist > maxR) {{
+                var scale = maxR / dist;
+                d.x = CX + dx * scale;
+                d.y = CY + dy * scale;
+            }}
+            /* 边界约束 */
+            var pad = 30;
+            d.x = Math.max(pad, Math.min(W - pad, d.x));
+            d.y = Math.max(pad, Math.min(H - pad, d.y));
+        }});
         weakLink
             .attr("x1", function(d) {{ return d.source.x; }})
             .attr("y1", function(d) {{ return d.source.y; }})
