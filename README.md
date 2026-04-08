@@ -20,9 +20,9 @@
 
 <div align="center">
 
-![WebUI Screenshot](docs/images/webui_screenshot.png)
+![WebUI Screenshot](docs/images/webui_screenshot.jpg)
 
-*WebUI 推理界面 — 专家群聊 + 证据图谱实时渲染*
+*WebUI 推理界面 — 忒修斯之线启动画面*
 
 </div>
 
