@@ -743,7 +743,7 @@ class DirectLLMClient:
     """直接HTTP调用智谱API的后备客户端"""
 
     def __init__(self):
-        self.api_key = "REDACTED_ZHIPUAI_KEY"
+        self.api_key = os.environ.get("ZHIPUAI_API_KEY", "")
         self.base_url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
         self.model = "glm-4-flash"
 

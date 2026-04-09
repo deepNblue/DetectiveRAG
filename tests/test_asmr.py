@@ -13,7 +13,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 os.chdir(PROJECT_ROOT)
 
-os.environ["ZHIPUAI_API_KEY"] = "REDACTED_ZHIPUAI_KEY"
+os.environ.setdefault("ZHIPUAI_API_KEY", "")  # 从环境变量读取，请勿硬编码
 
 from api.llm_client import LLMClient
 from agents.asmr.orchestrator import ASMROrchestrator
