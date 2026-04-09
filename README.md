@@ -59,6 +59,43 @@
 
 ---
 
+## 📸 系统截图
+
+<table>
+  <tr>
+    <td align="center"><b>1. 系统首页 — 探案天团</b></td>
+    <td align="center"><b>2. 多轮推理对话</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/1.png" width="480"/></td>
+    <td><img src="docs/screenshots/2.png" width="480"/></td>
+  </tr>
+  <tr>
+    <td align="center"><b>3. 证据图谱可视化</b></td>
+    <td align="center"><b>4. 专家群聊推理</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/3.png" width="480"/></td>
+    <td><img src="docs/screenshots/4.png" width="480"/></td>
+  </tr>
+  <tr>
+    <td align="center"><b>5. 矛盾检测分析</b></td>
+    <td align="center"><b>6. 多模态证据解析</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/5.png" width="480"/></td>
+    <td><img src="docs/screenshots/6.png" width="480"/></td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2"><b>7. 全案推理总览</b></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><img src="docs/screenshots/7.png" width="480"/></td>
+  </tr>
+</table>
+
+---
+
 ## 🚀 NVIDIA工具平台
 
 ### 使用的NVIDIA技术
